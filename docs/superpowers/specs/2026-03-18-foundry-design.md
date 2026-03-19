@@ -157,16 +157,24 @@ The session store is a cache, not the source of truth. On startup (or if the DB 
 ## Event Types
 
 ```rust
+pub struct RepoId {
+    pub owner: String,
+    pub repo: String,
+}
+
 pub enum Event {
     IssueAssigned {
         repo: RepoId,
         issue_number: u64,
         assigner: String,
+        /// Gitea webhook delivery ID — used for deduplication
+        delivery_id: String,
         timestamp: DateTime<Utc>,
     },
     IssueClosed {
         repo: RepoId,
         issue_number: u64,
+        delivery_id: String,
         timestamp: DateTime<Utc>,
     },
     IssueCommentCreated {
@@ -175,6 +183,7 @@ pub enum Event {
         comment_id: u64,
         author: String,
         body: String,
+        delivery_id: String,
         timestamp: DateTime<Utc>,
     },
     PrReviewSubmitted {
@@ -182,19 +191,23 @@ pub enum Event {
         pr_number: u64,
         reviewer: String,
         state: ReviewState,
+        delivery_id: String,
         timestamp: DateTime<Utc>,
     },
     PrMerged {
         repo: RepoId,
         pr_number: u64,
+        delivery_id: String,
         timestamp: DateTime<Utc>,
     },
     PrClosed {
         repo: RepoId,
         pr_number: u64,
+        delivery_id: String,
         timestamp: DateTime<Utc>,
     },
-    /// Synthetic event from polling — activity that may have been missed
+    /// Synthetic event from polling — activity that may have been missed.
+    /// Has no delivery_id; deduplicated by (repo, issue_number, timestamp window).
     PollRecovery {
         repo: RepoId,
         issue_number: u64,
@@ -204,6 +217,12 @@ pub enum Event {
 
 pub enum ReviewState { Approved, ChangesRequested, Comment }
 ```
+
+### Event Deduplication
+
+Webhooks and polling can produce duplicate events. The dispatcher deduplicates using a time-windowed set (5-minute window):
+- Webhook events: keyed by `delivery_id` (Gitea sets `X-Gitea-Delivery` on every webhook POST)
+- `PollRecovery` events: keyed by `(repo, issue_number, timestamp)` truncated to the polling interval
 
 ---
 
@@ -231,9 +250,16 @@ pub enum ReviewState { Approved, ChangesRequested, Comment }
 
 1. `Event::IssueCommentCreated` — body contains `/approve`, author is not the bot
 2. Dispatcher: transitions session to `Implementing`, calls `session_store.upsert()`
-3. Writes directive: *"Your plan is approved. Create branch `foundry/issue-{N}`, implement the changes, write tests, open a PR, post a comment on the issue linking to it."*
-4. Spawns container → Claude clones repo, creates branch, implements, pushes, opens PR via MCP, exits
-5. Dispatcher: polls for new PR on branch, saves `session.pr_number`, transitions to `InReview`
+3. Writes directive: *"Your plan is approved. Create branch `foundry/issue-{N}`, implement the changes, write tests, open a PR, post a comment on the issue linking to it. Before exiting, write your result to `/foundry/result.json`."*
+4. Spawns container → Claude clones repo, creates branch, implements, pushes, opens PR via MCP, writes `result.json`, exits
+5. Dispatcher: reads `result.json` from volume, saves `session.pr_number` and `session.branch_name`, transitions to `InReview`
+
+`result.json` structure:
+```json
+{ "pr_number": 7, "branch_name": "foundry/issue-42" }
+```
+
+This eliminates the race condition between PR creation and incoming review events — `pr_number` is captured synchronously before the dispatcher processes any further events.
 
 ### D) Reviewer posts review comments
 
@@ -242,13 +268,34 @@ pub enum ReviewState { Approved, ChangesRequested, Comment }
 3. Writes directive: *"A reviewer has submitted feedback. Read all review comments, fix the code or reply explaining your reasoning. Add new commits — do not force-push."*
 4. Spawns container → Claude reads reviews via MCP, pushes fixes, replies inline → exits
 
+### E) PR merged (by human)
+
+1. `Event::PrMerged` → `session_store.get_by_pr()` resolves to issue session
+2. Dispatcher: transitions session to `Done`, calls `session_store.delete()`
+3. Dispatcher: removes the per-issue Docker volume (no further turns needed)
+4. No container is spawned
+
+### F) PR closed without merge
+
+1. `Event::PrClosed` → `session_store.get_by_pr()` resolves to issue session
+2. Dispatcher: transitions session to `Done`, calls `session_store.delete()`
+3. Dispatcher: removes the per-issue Docker volume
+4. No container is spawned — the human chose to close the PR; no automated action is taken
+
+### G) Issue closed externally
+
+1. `Event::IssueClosed` → `session_store.get()` resolves to issue session
+2. If a PR is still open (`session.pr_number` is set), no action is taken — let flow E or F handle cleanup when the PR resolves
+3. If no PR exists, dispatcher transitions to `Done` and calls `session_store.delete()`
+4. No container is spawned
+
 ### Concurrency guard
 
-If a new event arrives for an issue that already has `container_running = true`, the event is held in a bounded in-memory queue per issue key. When the container exits, the dispatcher drains the queue and spawns one new container with a consolidated directive.
+If a new event arrives for an issue that already has `container_running = true`, the event is held in a bounded in-memory queue per issue key. When the container exits, the dispatcher drains the queue and spawns one new container with a consolidated directive covering all pending events (e.g., *"The reporter posted 2 new comments since your last turn — read the full thread and continue"*). The consolidated directive does not embed comment bodies; Claude reads the full thread via MCP tools.
 
-### Event deduplication
+### Container timeout
 
-Webhooks and polling can produce duplicate events. The dispatcher deduplicates by `(repo, issue_number, event_id, timestamp)` using a time-windowed set (5-minute window).
+If a container exceeds `timeout_secs`, the dispatcher kills it, sets `container_running = false`, and posts a comment on the issue: *"I ran into a problem and my last action timed out. Please let me know if you'd like me to try again."* Any queued events for the issue are then processed normally.
 
 ---
 
@@ -264,10 +311,10 @@ Webhooks and polling can produce duplicate events. The dispatcher deduplicates b
 
 | Volume | Target | Mode | Contents |
 |---|---|---|---|
-| `foundry-issue-{owner}-{repo}-{N}` | `/foundry/` | ro | `instruction.json` |
+| `foundry-issue-{owner}-{repo}-{N}` | `/foundry/` | rw | `instruction.json` (written by dispatcher before launch); `result.json` (written by Claude before exit) |
 | `foundry-shared` | `/etc/foundry/` | ro | `mcp-config.json` |
 
-The repo is cloned fresh each turn inside the container's ephemeral filesystem. No session history is persisted — Gitea is the source of truth.
+The repo is cloned fresh each turn inside the container's ephemeral writable filesystem (`/workspace/`). Claude Code's own working files (`~/.claude/`, git clones, build artifacts) all live on the ephemeral filesystem and are discarded on exit. No session history is persisted — Gitea is the source of truth.
 
 ### Environment Variables
 
@@ -277,6 +324,8 @@ GITEA_URL
 GITEA_TOKEN
 GITEA_BOT_USERNAME
 ```
+
+`ANTHROPIC_API_KEY` is passed as an environment variable and is visible via `docker inspect`. For v1 this is acceptable on a trusted local network. Future improvement: mount it as a Docker secret file and have the entrypoint read it from `/run/secrets/anthropic_api_key`.
 
 ### Entrypoint
 
@@ -302,6 +351,16 @@ claude --dangerously-skip-permissions \
 ```
 
 The directive is a fully-formed prompt assembled by the dispatcher. It includes all context (issue title, repo, phase, relevant history summary) so Claude can act without any initial orientation tool calls.
+
+### `result.json` Structure
+
+Written by Claude to `/foundry/result.json` before exiting on turns that produce a PR:
+
+```json
+{ "pr_number": 7, "branch_name": "foundry/issue-42" }
+```
+
+The dispatcher reads this file after the container exits to update session state. If the file is absent (e.g., Claude did not open a PR this turn), the dispatcher treats `pr_number` and `branch_name` as unchanged.
 
 ### MCP Config (`/etc/foundry/mcp-config.json`)
 
@@ -387,8 +446,6 @@ db_path = "/var/lib/foundry/state.db"
 
 [commands]
 approve = "/approve"
-pause = "/pause"
-resume = "/resume"
 
 [logging]
 level = "info"
@@ -413,7 +470,7 @@ foundry-setup \
 
 1. **Verify connectivity** — confirm Gitea is reachable and admin token is valid
 2. **Create bot user** — skip if already exists; `must_change_password: false`
-3. **Generate bot API token** — scopes: `read:issue`, `write:issue`, `read:repository`, `write:repository`, `read:user`. Print once. Skip if token named `foundry` already exists.
+3. **Generate bot API token** — scopes: `read:issue`, `write:issue`, `read:repository`, `write:repository`, `read:user`. Print once. Skip if token named `foundry` already exists. This token is used by the bot for API calls and git push over HTTP — it does not require admin scope. The `--admin-token` flag is a separate credential used only during setup.
 4. **Create system-level webhook** — `POST /api/v1/admin/hooks`. Single hook covers all repos. Events: `issues`, `issue_comment`, `pull_request`, `pull_request_review`. Update if already registered.
 5. **Print summary** — what was created, what was skipped, token (last 4 chars only)
 
