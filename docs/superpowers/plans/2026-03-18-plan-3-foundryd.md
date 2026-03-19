@@ -894,9 +894,9 @@ mod tests {
         .with_body(r#"{"data": [{"issues": []}]}"#)
         .create_async().await;
 
-        // Use the issues endpoint directly
+        // Use the issues endpoint directly (token is in the Authorization header, not the URL)
         let mock = server.mock("GET",
-            "/api/v1/issues?type=assigned&state=open&token=test&limit=50"
+            "/api/v1/issues?type=assigned&state=open&limit=50"
         )
         .with_status(200)
         .with_header("content-type", "application/json")
@@ -2186,7 +2186,8 @@ impl ContainerRuntime for DockerRuntime {
     }
 
     async fn remove_volume(&self, name: &str) -> Result<(), ContainerError> {
-        self.docker.remove_volume(name, None::<RemoveVolumeOptions>)
+        // RemoveVolumeOptions is generic in bollard 0.17 — provide the String type param
+        self.docker.remove_volume(name, None::<bollard::volume::RemoveVolumeOptions<String>>)
             .await
             .map_err(|e| ContainerError::Api(e.to_string()))?;
         Ok(())
@@ -2316,14 +2317,16 @@ impl ContainerRuntime for DockerRuntime {
     async fn list_running_with_label(
         &self,
         label_key: &str,
-        label_value: &str,
+        label_value: Option<&str>,
     ) -> Result<Vec<String>, ContainerError> {
         use bollard::container::ListContainersOptions;
         let mut filters = HashMap::new();
-        filters.insert(
-            "label".to_string(),
-            vec![format!("{}={}", label_key, label_value)],
-        );
+        // Docker filter: "key=value" for exact match, "key" for key-only (any value)
+        let label_filter = match label_value {
+            Some(v) => format!("{}={}", label_key, v),
+            None => label_key.to_string(),
+        };
+        filters.insert("label".to_string(), vec![label_filter]);
         filters.insert("status".to_string(), vec!["running".to_string()]);
 
         let containers = self.docker.list_containers(
@@ -2425,7 +2428,7 @@ mod tests {
         async fn read_from_volume(&self, _: &str, _: &str) -> Result<Vec<u8>, ContainerError> {
             Ok(b"{}".to_vec()) // Empty result.json
         }
-        async fn list_running_with_label(&self, _: &str, _: &str) -> Result<Vec<String>, ContainerError> { Ok(vec![]) }
+        async fn list_running_with_label(&self, _: &str, _: Option<&str>) -> Result<Vec<String>, ContainerError> { Ok(vec![]) }
         async fn kill_container(&self, _: &str) -> Result<(), ContainerError> { Ok(()) }
     }
 
@@ -3025,11 +3028,12 @@ async fn main() -> anyhow::Result<()> {
         cfg.clone(),
     ));
 
-    // Kill any orphaned containers from a previous crash
+    // Kill any orphaned containers from a previous crash.
+    // Pass None for the value to match any container with this label key.
     info!("Checking for orphaned containers");
     let orphans = runtime.list_running_with_label(
         container::docker::FOUNDRY_ISSUE_LABEL,
-        "*",
+        None,
     ).await.unwrap_or_default();
     for id in &orphans {
         info!("Killing orphaned container {}", id);

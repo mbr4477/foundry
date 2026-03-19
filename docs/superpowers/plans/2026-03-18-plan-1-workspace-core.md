@@ -74,6 +74,7 @@ hex = "0.4"
 bollard = "0.17"
 futures-util = "0.3"
 base64 = "0.22"
+rand = "0.8"
 
 # MCP
 rmcp = { version = "0.1", features = ["server", "transport-io"] }
@@ -92,12 +93,13 @@ authors = ["Foundry Bot <foundry@local>"]
 ```
 /target/
 **/*.rs.bk
-Cargo.lock
 .env
 *.db
 *.db-shm
 *.db-wal
 ```
+
+> **Note:** `Cargo.lock` is intentionally NOT listed here. This is a workspace of binary crates — `Cargo.lock` should be committed to ensure reproducible builds.
 
 - [ ] **Step 3: Verify workspace parses (no member crates yet — expected error)**
 
@@ -760,11 +762,12 @@ pub trait ContainerRuntime: Send + Sync + 'static {
         path: &str,
     ) -> Result<Vec<u8>, ContainerError>;
 
-    /// List running containers with a given label key=value.
+    /// List running containers with a given label key.
+    /// If `label_value` is `Some`, filters by `key=value`; if `None`, filters by key only (any value).
     async fn list_running_with_label(
         &self,
         label_key: &str,
-        label_value: &str,
+        label_value: Option<&str>,
     ) -> Result<Vec<String>, ContainerError>;
 
     /// Kill a running container.
