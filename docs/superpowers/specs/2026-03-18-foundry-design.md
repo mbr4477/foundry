@@ -316,6 +316,7 @@ If a container exceeds `timeout_secs`, or exits with a non-zero exit code, the d
 - Node.js + Claude Code CLI (`@anthropic-ai/claude-code`)
 - `foundry-mcp-gitea` binary at `/usr/local/bin/`
 - `git`, `jq`, standard build tools
+- Non-root user `foundry` (UID 1000) — Claude Code refuses `--dangerously-skip-permissions` when running as root. The container runs as `foundry` by default (`USER foundry` in the Dockerfile). All relevant paths (`/foundry/`, `/etc/foundry/`, `HOME`) must be readable by this user.
 
 ### Mounts
 
@@ -333,7 +334,13 @@ ANTHROPIC_API_KEY
 GITEA_URL
 GITEA_TOKEN
 GITEA_BOT_USERNAME
+GIT_AUTHOR_NAME       # e.g. "Foundry Bot"
+GIT_AUTHOR_EMAIL      # e.g. "foundry-bot@gitea.local"
+GIT_COMMITTER_NAME    # same as GIT_AUTHOR_NAME
+GIT_COMMITTER_EMAIL   # same as GIT_AUTHOR_EMAIL
 ```
+
+`GIT_AUTHOR_*` and `GIT_COMMITTER_*` are standard Git environment variables. Setting them ensures every `git commit` inside the container works without requiring a `~/.gitconfig`. The values are driven by `foundry.toml` (under `[gitea]`) and passed by the dispatcher at container launch.
 
 `ANTHROPIC_API_KEY` is passed as an environment variable and is visible via `docker inspect`. For v1 this is acceptable on a trusted local network. Future improvement: mount it as a Docker secret file and have the entrypoint read it from `/run/secrets/anthropic_api_key`.
 
@@ -430,6 +437,8 @@ webhook_secret = "${FOUNDRY_WEBHOOK_SECRET}"
 url = "https://gitea.local"
 api_token = "${FOUNDRY_GITEA_TOKEN}"
 bot_username = "foundry-bot"
+bot_display_name = "Foundry Bot"
+bot_email = "foundry-bot@gitea.local"
 # Optional allowlist — if omitted, process all repos the bot is assigned issues in
 # repos = ["alice/myproject"]
 
