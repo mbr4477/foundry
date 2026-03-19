@@ -101,7 +101,8 @@ pub trait CodeHost: Send + Sync + 'static {
 
     async fn list_pr_reviews(
         &self,
-        key: &IssueKey,
+        owner: &str,
+        repo: &str,
         pr_number: u64,
     ) -> Result<Vec<ForgeReview>, CodeHostError>;
 }
@@ -137,7 +138,7 @@ pub enum IssuePhase {
 }
 ```
 
-`volume_name` is not stored — derived deterministically as `foundry-issue-{owner}-{repo}-{N}`.
+`volume_name` is not stored — derived deterministically as `foundry-issue-{owner}__{repo}__{N}` (double underscore separator, since Gitea usernames and repo names cannot contain `__`).
 
 ### Crash Recovery
 
@@ -150,7 +151,7 @@ The session store is a cache, not the source of truth. On startup (or if the DB 
 | Open PR exists | InReview |
 | PR merged or issue closed | Done |
 
-`container_running` is always reset to `false` on startup.
+`container_running` is always reset to `false` on startup. On startup, `foundryd` also lists all running containers with a `foundry.issue` label and kills any orphans before processing events — this handles the case where `foundryd` crashed while a container was still running.
 
 ---
 
@@ -186,6 +187,9 @@ pub enum Event {
         delivery_id: String,
         timestamp: DateTime<Utc>,
     },
+    /// Note: no body field — Claude reads review content via list_pr_reviews MCP tool.
+    /// IssueCommentCreated carries body as an optimization (single comment, cheap to include);
+    /// PR reviews may have many inline comments so Claude always fetches them via MCP.
     PrReviewSubmitted {
         repo: RepoId,
         pr_number: u64,
@@ -223,6 +227,12 @@ pub enum ReviewState { Approved, ChangesRequested, Comment }
 Webhooks and polling can produce duplicate events. The dispatcher deduplicates using a time-windowed set (5-minute window):
 - Webhook events: keyed by `delivery_id` (Gitea sets `X-Gitea-Delivery` on every webhook POST)
 - `PollRecovery` events: keyed by `(repo, issue_number, timestamp)` truncated to the polling interval
+
+The polling `since` anchor is a global high-water mark: the timestamp of the most recently processed event across all issues, persisted in the session store. On first run (or after DB loss), polling starts from 24 hours ago.
+
+### Known Limitations (v1)
+
+- Standalone PR inline comments not submitted as part of a formal review (`pull_request_comment` webhook event) are not handled in real-time — they will be picked up on the next polling cycle. This is acceptable for v1.
 
 ---
 
@@ -293,9 +303,9 @@ This eliminates the race condition between PR creation and incoming review event
 
 If a new event arrives for an issue that already has `container_running = true`, the event is held in a bounded in-memory queue per issue key. When the container exits, the dispatcher drains the queue and spawns one new container with a consolidated directive covering all pending events (e.g., *"The reporter posted 2 new comments since your last turn — read the full thread and continue"*). The consolidated directive does not embed comment bodies; Claude reads the full thread via MCP tools.
 
-### Container timeout
+### Container timeout and non-zero exit
 
-If a container exceeds `timeout_secs`, the dispatcher kills it, sets `container_running = false`, and posts a comment on the issue: *"I ran into a problem and my last action timed out. Please let me know if you'd like me to try again."* Any queued events for the issue are then processed normally.
+If a container exceeds `timeout_secs`, or exits with a non-zero exit code, the dispatcher kills it (if still running), sets `container_running = false`, and posts a comment on the issue: *"I ran into a problem on my last turn. Please let me know if you'd like me to try again."* Any queued events for the issue are then processed normally. No automatic retry — a human decides whether to re-trigger.
 
 ---
 
@@ -433,7 +443,7 @@ runtime = "docker"       # "docker" or "podman"
 network = "foundry-net"
 memory_limit_mb = 4096
 cpu_limit = 2.0
-max_concurrent = 4
+max_concurrent = 4          # global limit across all issues
 timeout_secs = 1800
 
 [volumes]
