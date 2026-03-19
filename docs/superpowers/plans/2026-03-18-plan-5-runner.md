@@ -236,7 +236,7 @@ Expected: image builds successfully. The Rust compilation stage may take several
 - [ ] **Step 2: Verify the image runs as the `foundry` user**
 
 ```bash
-docker run --rm foundry-runner:latest whoami
+docker run --rm --entrypoint whoami foundry-runner:latest
 ```
 
 Expected output: `foundry`
@@ -244,32 +244,31 @@ Expected output: `foundry`
 - [ ] **Step 3: Verify required binaries are present**
 
 ```bash
-docker run --rm foundry-runner:latest which foundry-mcp-gitea
+docker run --rm --entrypoint which foundry-runner:latest foundry-mcp-gitea
 ```
 
 Expected: `/usr/local/bin/foundry-mcp-gitea`
 
 ```bash
-docker run --rm foundry-runner:latest foundry-mcp-gitea --version 2>&1 || \
-    docker run --rm foundry-runner:latest ls -lh /usr/local/bin/foundry-mcp-gitea
+docker run --rm --entrypoint ls foundry-runner:latest -lh /usr/local/bin/foundry-mcp-gitea
 ```
 
 Expected: binary exists and is executable.
 
 ```bash
-docker run --rm foundry-runner:latest which claude
+docker run --rm --entrypoint which foundry-runner:latest claude
 ```
 
 Expected: path to the Claude Code CLI.
 
 ```bash
-docker run --rm foundry-runner:latest git --version
+docker run --rm --entrypoint git foundry-runner:latest --version
 ```
 
 Expected: `git version 2.x.x`
 
 ```bash
-docker run --rm foundry-runner:latest jq --version
+docker run --rm --entrypoint jq foundry-runner:latest --version
 ```
 
 Expected: `jq-1.x`

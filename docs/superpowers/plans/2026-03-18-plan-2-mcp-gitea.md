@@ -190,7 +190,7 @@ pub enum GiteaClientError {
 }
 
 /// Gitea API response types
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GiteaIssue {
     pub number: u64,
     pub title: String,
@@ -201,12 +201,12 @@ pub struct GiteaIssue {
     pub user: GiteaUser,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GiteaUser {
     pub login: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GiteaComment {
     pub id: u64,
     pub body: String,
@@ -214,14 +214,14 @@ pub struct GiteaComment {
     pub user: GiteaUser,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GiteaRepo {
     pub name: String,
     pub description: Option<String>,
     pub default_branch: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GiteaPr {
     pub number: u64,
     pub title: String,
@@ -231,20 +231,30 @@ pub struct GiteaPr {
     pub base: GiteaBranch,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GiteaBranch {
     pub label: String,
     #[serde(rename = "ref")]
     pub ref_name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GiteaReview {
     pub id: u64,
     pub user: GiteaUser,
     pub state: String,
     pub body: String,
     pub submitted_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GiteaPrReviewComment {
+    pub id: u64,
+    pub body: String,
+    pub created_at: String,
+    pub user: GiteaUser,
+    pub path: Option<String>,
+    pub diff_hunk: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -382,6 +392,91 @@ impl GiteaClient {
         // Gitea PR comments go through the issues endpoint
         self.create_issue_comment(owner, repo, pr_number, body).await
     }
+
+    pub async fn edit_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        title: Option<&str>,
+        body: Option<&str>,
+        state: Option<&str>,
+    ) -> Result<GiteaIssue, GiteaClientError> {
+        #[derive(Serialize)]
+        struct EditIssueBody<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            title: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            body: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            state: Option<&'a str>,
+        }
+        let resp = self.http
+            .patch(self.api(&format!("/repos/{}/{}/issues/{}", owner, repo, number)))
+            .bearer_auth(&self.token)
+            .json(&EditIssueBody { title, body, state })
+            .send().await?;
+        Ok(Self::check_status(resp).await?.json().await?)
+    }
+
+    pub async fn update_pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        title: Option<&str>,
+        body: Option<&str>,
+    ) -> Result<GiteaPr, GiteaClientError> {
+        #[derive(Serialize)]
+        struct UpdatePrBody<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            title: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            body: Option<&'a str>,
+        }
+        let resp = self.http
+            .patch(self.api(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number)))
+            .bearer_auth(&self.token)
+            .json(&UpdatePrBody { title, body })
+            .send().await?;
+        Ok(Self::check_status(resp).await?.json().await?)
+    }
+
+    pub async fn list_pr_review_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+    ) -> Result<Vec<GiteaPrReviewComment>, GiteaClientError> {
+        let resp = self.http
+            .get(self.api(&format!("/repos/{}/{}/pulls/{}/reviews/comments", owner, repo, pr_number)))
+            .bearer_auth(&self.token)
+            .send().await?;
+        Ok(Self::check_status(resp).await?.json().await?)
+    }
+
+    pub async fn reply_to_pr_review_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        comment_id: u64,
+        body: &str,
+    ) -> Result<GiteaComment, GiteaClientError> {
+        #[derive(Serialize)]
+        struct ReplyBody<'a> {
+            body: &'a str,
+        }
+        let resp = self.http
+            .post(self.api(&format!(
+                "/repos/{}/{}/pulls/{}/reviews/comments/{}/replies",
+                owner, repo, pr_number, comment_id
+            )))
+            .bearer_auth(&self.token)
+            .json(&ReplyBody { body })
+            .send().await?;
+        Ok(Self::check_status(resp).await?.json().await?)
+    }
 }
 ```
 
@@ -488,6 +583,36 @@ pub async fn create_issue_comment(
         comment.id
     ))]))
 }
+
+#[derive(Deserialize)]
+pub struct EditIssueInput {
+    pub owner: String,
+    pub repo: String,
+    pub issue_number: u64,
+    pub title: Option<String>,
+    pub body: Option<String>,
+    pub state: Option<String>,
+}
+
+pub async fn edit_issue(
+    client: Arc<GiteaClient>,
+    input: EditIssueInput,
+) -> Result<CallToolResult, McpError> {
+    let issue = client
+        .edit_issue(
+            &input.owner,
+            &input.repo,
+            input.issue_number,
+            input.title.as_deref(),
+            input.body.as_deref(),
+            input.state.as_deref(),
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let text = serde_json::to_string_pretty(&issue)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    Ok(CallToolResult::success(vec![Content::text(text)]))
+}
 ```
 
 - [ ] **Step 2: Implement `tools/pull_requests.rs`**
@@ -589,6 +714,83 @@ pub async fn create_pr_comment(
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
     Ok(CallToolResult::success(vec![Content::text(format!(
         "Comment created with id {}",
+        comment.id
+    ))]))
+}
+
+#[derive(Deserialize)]
+pub struct UpdatePullRequestInput {
+    pub owner: String,
+    pub repo: String,
+    pub pr_number: u64,
+    pub title: Option<String>,
+    pub body: Option<String>,
+}
+
+pub async fn update_pull_request(
+    client: Arc<GiteaClient>,
+    input: UpdatePullRequestInput,
+) -> Result<CallToolResult, McpError> {
+    let pr = client
+        .update_pull_request(
+            &input.owner,
+            &input.repo,
+            input.pr_number,
+            input.title.as_deref(),
+            input.body.as_deref(),
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let text = serde_json::to_string_pretty(&pr)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    Ok(CallToolResult::success(vec![Content::text(text)]))
+}
+
+#[derive(Deserialize)]
+pub struct ListPrReviewCommentsInput {
+    pub owner: String,
+    pub repo: String,
+    pub pr_number: u64,
+}
+
+pub async fn list_pr_review_comments(
+    client: Arc<GiteaClient>,
+    input: ListPrReviewCommentsInput,
+) -> Result<CallToolResult, McpError> {
+    let comments = client
+        .list_pr_review_comments(&input.owner, &input.repo, input.pr_number)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let text = serde_json::to_string_pretty(&comments)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    Ok(CallToolResult::success(vec![Content::text(text)]))
+}
+
+#[derive(Deserialize)]
+pub struct ReplyToPrCommentInput {
+    pub owner: String,
+    pub repo: String,
+    pub pr_number: u64,
+    pub comment_id: u64,
+    pub body: String,
+}
+
+pub async fn reply_to_pr_comment(
+    client: Arc<GiteaClient>,
+    input: ReplyToPrCommentInput,
+) -> Result<CallToolResult, McpError> {
+    let comment = client
+        .reply_to_pr_review_comment(
+            &input.owner,
+            &input.repo,
+            input.pr_number,
+            input.comment_id,
+            &input.body,
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    Ok(CallToolResult::success(vec![Content::text(format!(
+        "Reply posted with id {}",
         comment.id
     ))]))
 }
@@ -767,6 +969,42 @@ impl FoundryGiteaServer {
     #[tool(description = "Get the authenticated bot user's username")]
     async fn get_authenticated_user(&self) -> rmcp::Result<rmcp::CallToolResult> {
         tools::repository::get_authenticated_user(self.client.clone()).await
+            .map_err(Into::into)
+    }
+
+    #[tool(description = "Edit an issue's title, body, or state")]
+    async fn edit_issue(
+        &self,
+        #[tool(param)] input: tools::issues::EditIssueInput,
+    ) -> rmcp::Result<rmcp::CallToolResult> {
+        tools::issues::edit_issue(self.client.clone(), input).await
+            .map_err(Into::into)
+    }
+
+    #[tool(description = "Update a pull request's title or body")]
+    async fn update_pull_request(
+        &self,
+        #[tool(param)] input: tools::pull_requests::UpdatePullRequestInput,
+    ) -> rmcp::Result<rmcp::CallToolResult> {
+        tools::pull_requests::update_pull_request(self.client.clone(), input).await
+            .map_err(Into::into)
+    }
+
+    #[tool(description = "List inline review comments on a pull request")]
+    async fn list_pr_review_comments(
+        &self,
+        #[tool(param)] input: tools::pull_requests::ListPrReviewCommentsInput,
+    ) -> rmcp::Result<rmcp::CallToolResult> {
+        tools::pull_requests::list_pr_review_comments(self.client.clone(), input).await
+            .map_err(Into::into)
+    }
+
+    #[tool(description = "Reply to an inline review comment on a pull request")]
+    async fn reply_to_pr_comment(
+        &self,
+        #[tool(param)] input: tools::pull_requests::ReplyToPrCommentInput,
+    ) -> rmcp::Result<rmcp::CallToolResult> {
+        tools::pull_requests::reply_to_pr_comment(self.client.clone(), input).await
             .map_err(Into::into)
     }
 }

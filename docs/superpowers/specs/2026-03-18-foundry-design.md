@@ -138,7 +138,7 @@ pub enum IssuePhase {
 }
 ```
 
-`volume_name` is not stored — derived deterministically as `foundry-issue-{owner}__{repo}__{N}` (double underscore separator, since Gitea usernames and repo names cannot contain `__`).
+`volume_name` is not stored — derived deterministically as `foundry-issue__{owner}__{repo}__{N}` (double underscore separators throughout, since Gitea usernames and repo names cannot contain `__`).
 
 ### Crash Recovery
 
@@ -322,7 +322,7 @@ If a container exceeds `timeout_secs`, or exits with a non-zero exit code, the d
 
 | Volume | Target | Mode | Contents |
 |---|---|---|---|
-| `foundry-issue-{owner}-{repo}-{N}` | `/foundry/` | rw | `instruction.json` (written by dispatcher before launch); `result.json` (written by Claude before exit) |
+| `foundry-issue__{owner}__{repo}__{N}` | `/foundry/` | rw | `instruction.json` (written by dispatcher before launch); `result.json` (written by Claude before exit) |
 | `foundry-shared` | `/etc/foundry/` | ro | `mcp-config.json` |
 
 The repo is cloned fresh each turn inside the container's ephemeral writable filesystem (`/workspace/`). Claude Code's own working files (`~/.claude/`, git clones, build artifacts) all live on the ephemeral filesystem and are discarded on exit. No session history is persisted — Gitea is the source of truth.

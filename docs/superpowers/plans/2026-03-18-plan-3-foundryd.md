@@ -47,6 +47,8 @@ sha2.workspace = true
 hex.workspace = true
 sqlx.workspace = true
 bollard.workspace = true
+futures-util.workspace = true
+base64.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
@@ -2201,14 +2203,16 @@ impl ContainerRuntime for DockerRuntime {
     async fn write_to_volume(
         &self,
         volume: &str,
-        path: &str,
+        path: &str,  // relative path within the volume, e.g. "instruction.json"
         contents: &[u8],
     ) -> Result<(), ContainerError> {
-        // Write by running a helper container that echoes the content
-        // Use base64 encoding to safely handle arbitrary bytes
-        let b64 = base64::encode(contents);
+        // Write by running a helper container that echoes the content.
+        // The volume is mounted at /data; path is relative to the volume root.
+        // Use base64 encoding to safely handle arbitrary bytes.
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let b64 = STANDARD.encode(contents);
         let cmd = format!(
-            "sh -c 'echo {} | base64 -d > {}'",
+            "sh -c 'echo {} | base64 -d > /data/{}'",
             b64, path
         );
 
@@ -2255,12 +2259,16 @@ impl ContainerRuntime for DockerRuntime {
     async fn read_from_volume(&self, volume: &str, path: &str)
         -> Result<Vec<u8>, ContainerError>
     {
-        // Similar helper container approach
+        // path is relative to the volume root, e.g. "result.json"
+        // Run a helper container that cats the file; capture stdout via Docker logs API.
+        use bollard::container::LogsOptions;
+        use futures_util::StreamExt;
+
         let container = self.docker.create_container(
             None::<CreateContainerOptions<String>>,
             Config::<String> {
                 image: Some("alpine:latest".into()),
-                cmd: Some(vec!["cat".into(), path.to_string()]),
+                cmd: Some(vec!["cat".into(), format!("/data/{}", path)]),
                 host_config: Some(HostConfig {
                     mounts: Some(vec![Mount {
                         source: Some(volume.to_string()),
@@ -2276,12 +2284,33 @@ impl ContainerRuntime for DockerRuntime {
             },
         ).await.map_err(|e| ContainerError::Api(e.to_string()))?;
 
-        // For simplicity, use the exec API to read the file instead
-        // This is a known limitation — in production, prefer mounting a tmpfs and using exec
+        self.docker.start_container(&container.id, None::<StartContainerOptions<String>>)
+            .await
+            .map_err(|e| ContainerError::Api(e.to_string()))?;
+
+        // Wait for the container to finish
+        let mut wait_stream = self.docker.wait_container(
+            &container.id,
+            None::<WaitContainerOptions<String>>,
+        );
+        wait_stream.next().await;
+
+        // Collect stdout via Docker logs
+        let mut output = Vec::new();
+        let mut log_stream = self.docker.logs(
+            &container.id,
+            Some(LogsOptions::<String> {
+                stdout: true,
+                follow: false,
+                ..Default::default()
+            }),
+        );
+        while let Some(Ok(chunk)) = log_stream.next().await {
+            output.extend_from_slice(&chunk.into_bytes());
+        }
+
         let _ = self.remove_container(&container.id).await;
-        Err(ContainerError::Api(
-            "read_from_volume: use exec approach — not implemented in this stub".into()
-        ))
+        Ok(output)
     }
 
     async fn list_running_with_label(
@@ -2315,7 +2344,7 @@ impl ContainerRuntime for DockerRuntime {
 }
 ```
 
-> **Note for implementer:** Add `base64 = "0.21"` to `foundryd/Cargo.toml` dependencies. The `read_from_volume` stub is intentionally incomplete — for v1, the dispatcher reads `result.json` by using a separate Alpine container with exec, or by implementing a proper log-capture approach. This is a known gap to address during integration testing.
+> **Note for implementer:** `base64` and `futures-util` are declared as workspace dependencies in `Cargo.toml`. `read_from_volume` uses the Docker logs API to capture stdout from the Alpine helper container. `write_to_volume` and `read_from_volume` both treat `path` as relative to the volume root (e.g., `"instruction.json"`), not as an absolute path.
 
 - [ ] **Step 4: Create `container/mod.rs`**
 
@@ -2803,7 +2832,8 @@ impl Dispatcher {
         // Ensure volume and write instruction
         let vol_name = key.volume_name(&self.config.volumes.issue_prefix);
         self.runtime.ensure_volume(&vol_name).await?;
-        self.runtime.write_to_volume(&vol_name, "/foundry/instruction.json", &instruction_json).await?;
+        // path is relative to the volume root; the runner mounts the volume at /foundry
+        self.runtime.write_to_volume(&vol_name, "instruction.json", &instruction_json).await?;
 
         // Build container spec
         let mut env = HashMap::new();
@@ -2814,6 +2844,11 @@ impl Dispatcher {
         env.insert("GIT_AUTHOR_EMAIL".into(), self.config.gitea.bot_email.clone());
         env.insert("GIT_COMMITTER_NAME".into(), self.config.gitea.bot_display_name.clone());
         env.insert("GIT_COMMITTER_EMAIL".into(), self.config.gitea.bot_email.clone());
+        // Pass the Anthropic API key so Claude Code can authenticate inside the container
+        env.insert(
+            "ANTHROPIC_API_KEY".into(),
+            std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
+        );
 
         let mut labels = HashMap::new();
         labels.insert(
@@ -2854,7 +2889,7 @@ impl Dispatcher {
             match runtime.run_container(spec).await {
                 Ok(result) => {
                     // Try to read result.json for pr_number/branch_name
-                    if let Ok(bytes) = runtime.read_from_volume(&vol_name_clone, "/foundry/result.json").await {
+                    if let Ok(bytes) = runtime.read_from_volume(&vol_name_clone, "result.json").await {
                         if let Ok(result_json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                             if let Some(mut session) = store.get(&key).await.ok().flatten() {
                                 if let Some(pr_number) = result_json["pr_number"].as_u64() {

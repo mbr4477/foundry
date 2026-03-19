@@ -72,6 +72,8 @@ hex = "0.4"
 
 # Docker
 bollard = "0.17"
+futures-util = "0.3"
+base64 = "0.22"
 
 # MCP
 rmcp = { version = "0.1", features = ["server", "transport-io"] }
