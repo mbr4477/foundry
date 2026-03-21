@@ -34,13 +34,8 @@ struct GiteaUserRaw {
 }
 
 #[derive(Debug, Deserialize)]
-struct GiteaRepoOwnerRaw {
-    login: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct GiteaRepoRefRaw {
-    owner: GiteaRepoOwnerRaw,
+    owner: String,
     name: String,
 }
 
@@ -128,7 +123,7 @@ impl CodeHost for GiteaCodeHost {
                 let pr_number = issue.pull_request.as_ref().map(|_| issue.number);
                 Some(HostIssue {
                     key: IssueKey {
-                        owner: repo.owner.login,
+                        owner: repo.owner,
                         repo: repo.name,
                         issue_number: issue.number,
                     },
@@ -247,7 +242,7 @@ mod tests {
                 "updated_at": "2026-01-01T00:00:00Z",
                 "assignees": [{"login": "foundry-bot"}],
                 "user": {"login": "alice"},
-                "repository": {"owner": {"login": "alice"}, "name": "proj"}
+                "repository": {"owner": "alice", "name": "proj"}
             }]"#,
             )
             .create_async()
