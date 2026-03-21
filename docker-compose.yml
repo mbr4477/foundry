@@ -20,7 +20,7 @@ services:
       - USER_GID=1000
     volumes:
       - gitea-data:/data
-      - ./config/gitea/app.ini:/data/gitea/conf/app.ini:ro
+      - ./config/gitea/app.ini:/data/gitea/conf/app.ini
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     ports:
