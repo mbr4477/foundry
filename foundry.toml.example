@@ -1,0 +1,36 @@
+# foundry.toml.example — copy to foundry.toml and fill in secrets
+
+[server]
+listen_addr = "0.0.0.0:8477"
+webhook_secret = "${FOUNDRY_WEBHOOK_SECRET}"  # set env var
+
+[gitea]
+url = "http://gitea:3000"
+api_token = "${FOUNDRY_GITEA_TOKEN}"          # set env var (from gitea-init.sh output)
+bot_username = "foundry-bot"
+bot_display_name = "Foundry Bot"
+bot_email = "foundry-bot@gitea.local"
+
+[polling]
+enabled = true
+interval_secs = 120
+
+[container]
+image = "foundry-runner:latest"
+runtime = "docker"
+network = "foundry-net"
+memory_limit_mb = 2048
+cpu_limit = 2.0
+max_concurrent = 3
+timeout_secs = 600
+
+[volumes]
+issue_prefix = "foundry-issue"
+shared_volume = "foundry-shared"
+
+[commands]
+approve = "/approve"
+
+[logging]
+level = "info"
+format = "json"

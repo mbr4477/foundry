@@ -1,0 +1,78 @@
+# docker-compose.yml — Foundry development environment
+#
+# Usage:
+#   docker-compose up -d
+#   ./scripts/gitea-init.sh \
+#     --gitea-url http://localhost:3000 \
+#     --admin-username gitea-admin \
+#     --admin-password <password> \
+#     --admin-email admin@gitea.local \
+#     --webhook-url http://foundryd:8477/webhook \
+#     --webhook-secret <secret>
+
+services:
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    restart: unless-stopped
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__database__DB_TYPE=sqlite3
+      - GITEA__server__DOMAIN=localhost
+      - GITEA__server__HTTP_PORT=3000
+      - GITEA__server__ROOT_URL=http://localhost:3000/
+      - GITEA__webhook__ALLOWED_HOST_LIST=foundryd,localhost,*
+      - GITEA__webhook__SKIP_TLS_VERIFY=true
+    volumes:
+      - gitea-data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    networks:
+      - foundry-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── foundryd (uncomment after running gitea-init.sh and getting FOUNDRY_GITEA_TOKEN) ─────
+  #
+  # foundryd:
+  #   image: ghcr.io/your-org/foundryd:latest  # or build locally
+  #   # build:
+  #   #   context: ./foundry
+  #   #   dockerfile: Dockerfile
+  #   container_name: foundryd
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./foundry.toml:/etc/foundryd/foundry.toml:ro
+  #     - foundry-shared:/foundry-shared
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   environment:
+  #     - FOUNDRY_ADMIN_TOKEN=${FOUNDRY_ADMIN_TOKEN}
+  #     - FOUNDRY_WEBHOOK_SECRET=${FOUNDRY_WEBHOOK_SECRET}
+  #     - FOUNDRY_GITEA_TOKEN=${FOUNDRY_GITEA_TOKEN}
+  #     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+  #   ports:
+  #     - "8477:8477"
+  #   networks:
+  #     - foundry-net
+  #   depends_on:
+  #     gitea:
+  #       condition: service_healthy
+
+networks:
+  foundry-net:
+    driver: bridge
+    name: foundry-net
+
+volumes:
+  gitea-data:
+    driver: local
+  foundry-shared:
+    driver: local
