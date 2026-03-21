@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
     {
         use foundry_core::{
             traits::code_host::CodeHost,
-            types::{IssueKey, IssuePhase, IssueSession},
+            types::{IssuePhase, IssueSession},
         };
         let code_host = code_host::gitea::GiteaCodeHost::new(
             cfg.gitea.url.clone(),

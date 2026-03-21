@@ -21,6 +21,7 @@ use tracing::{debug, warn};
 
 type HmacSha256 = Hmac<Sha256>;
 
+#[allow(dead_code)]
 pub fn compute_hmac_sha256(secret: &str, body: &[u8]) -> String {
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
         .expect("HMAC can take key of any size");

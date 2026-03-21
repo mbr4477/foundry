@@ -10,6 +10,7 @@ use serde::Deserialize;
 pub struct GiteaCodeHost {
     base_url: String,
     token: String,
+    #[allow(dead_code)]
     bot_username: String,
     client: reqwest::Client,
 }
@@ -52,6 +53,7 @@ struct GiteaIssueRaw {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct GiteaPullRequestRef {
     merged: Option<bool>,
     merged_at: Option<String>,

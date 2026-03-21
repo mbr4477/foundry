@@ -41,6 +41,7 @@ pub struct GiteaConfig {
     pub bot_username: String,
     pub bot_display_name: String,
     pub bot_email: String,
+    #[allow(dead_code)]
     pub repos: Option<Vec<String>>,
 }
 
@@ -61,6 +62,7 @@ impl Default for PollingConfig {
 #[derive(Debug, Deserialize)]
 pub struct ContainerConfig {
     pub image: String,
+    #[allow(dead_code)]
     pub runtime: String,
     pub network: String,
     pub memory_limit_mb: u64,

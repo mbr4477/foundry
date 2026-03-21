@@ -77,6 +77,7 @@ impl Dispatcher {
     }
 
     /// Drain and return queued events for an issue.
+    #[allow(dead_code)]
     async fn drain_queue(&self, key: &IssueKey) -> Vec<Event> {
         let mut queues = self.event_queue.lock().await;
         queues.remove(key).map(|q| q.into_iter().collect()).unwrap_or_default()
