@@ -167,7 +167,7 @@ pub enum IssuePhase {
 }
 ```
 
-`volume_name` is not stored — derived deterministically as `foundry-issue__{owner}__{repo}__{N}` (double underscore separators throughout, since Gitea usernames and repo names cannot contain `__`).
+`volume_name` is not stored — derived deterministically as `{issue_prefix}__{owner}__{repo}__{N}`, where `issue_prefix` comes from `[volumes].issue_prefix` in `foundry.toml` (default `foundry-issue`). Double underscores are used as separators throughout, since Gitea usernames and repo names cannot contain `__`.
 
 ### Startup Reconstruction
 
@@ -246,6 +246,10 @@ pub enum Event {
     PollRecovery {
         repo: RepoId,
         issue_number: u64,
+        /// Wall clock time when the polling source generated this event,
+        /// truncated to the polling interval. Used as the deduplication key
+        /// so back-to-back polling cycles within the same interval produce
+        /// the same key and are dropped as duplicates.
         timestamp: DateTime<Utc>,
     },
 }
@@ -540,7 +544,9 @@ foundry-setup \
 2. **Create bot user** — skip if already exists; `must_change_password: false`
 3. **Generate bot API token** — scopes: `read:issue`, `write:issue`, `read:repository`, `write:repository`, `read:user`. Print once. Skip if token named `foundry` already exists. This token is used by the bot for API calls and git push over HTTP — it does not require admin scope. The `--admin-token` flag is a separate credential used only during setup.
 4. **Create system-level webhook** — `POST /api/v1/admin/hooks`. Single hook covers all repos. Events: `issues`, `issue_comment`, `pull_request`, `pull_request_review`. Update if already registered.
-5. **Print summary** — what was created, what was skipped, token (last 4 chars only)
+5. **Create Docker network** — `docker network create foundry-net` if it doesn't already exist. Skip if present.
+6. **Create shared Docker volume** — `docker volume create foundry-shared` if it doesn't already exist. Skip if present.
+7. **Print summary** — what was created, what was skipped, token (last 4 chars only)
 
 Bot collaborator access on individual repos is managed manually by admins — not by `foundry-setup`.
 
@@ -550,5 +556,5 @@ Bot collaborator access on individual repos is managed manually by admins — no
 
 On SIGTERM:
 1. Stop accepting new webhooks
-2. Wait for running containers to finish (up to `timeout_secs`)
+2. Wait for running containers to finish (up to `container.timeout_secs` — reusing the same per-container limit as the drain window)
 3. Exit
