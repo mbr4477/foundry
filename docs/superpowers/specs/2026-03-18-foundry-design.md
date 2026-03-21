@@ -369,13 +369,15 @@ The repo is cloned fresh each turn inside the container's ephemeral writable fil
 ```
 ANTHROPIC_API_KEY
 GITEA_HOST            # gitea-mcp's name for the Gitea instance URL
-GITEA_ACCESS_TOKEN    # gitea-mcp's name for the API token
-GITEA_BOT_USERNAME    # available to Claude via the directive for self-identification; not consumed by gitea-mcp
+GITEA_ACCESS_TOKEN    # gitea-mcp's name for the API token; also used by GIT_ASKPASS for HTTP git auth
+GITEA_BOT_USERNAME    # used by GIT_ASKPASS for HTTP git auth and available to Claude via the directive
 GIT_AUTHOR_NAME       # e.g. "Foundry Bot"
 GIT_AUTHOR_EMAIL      # e.g. "foundry-bot@gitea.local"
 GIT_COMMITTER_NAME    # same as GIT_AUTHOR_NAME
 GIT_COMMITTER_EMAIL   # same as GIT_AUTHOR_EMAIL
 ```
+
+`GIT_ASKPASS` is set internally by the entrypoint script (not an external input). It points to a temporary script that returns `GITEA_BOT_USERNAME` for username prompts and `GITEA_ACCESS_TOKEN` for password prompts, enabling `git clone` and `git push` over HTTPS without embedding credentials in remote URLs.
 
 `GITEA_HOST` and `GITEA_ACCESS_TOKEN` use gitea-mcp's expected env var names. `foundryd` passes them directly — no remapping needed. `GIT_AUTHOR_*` and `GIT_COMMITTER_*` are standard Git environment variables ensuring every `git commit` works without `~/.gitconfig`. All values come from `foundry.toml` (under `[gitea]`).
 
@@ -386,6 +388,21 @@ GIT_COMMITTER_EMAIL   # same as GIT_AUTHOR_EMAIL
 ```bash
 #!/bin/bash
 set -euo pipefail
+
+# Configure git HTTP authentication using GIT_ASKPASS.
+# Git calls this script when it needs credentials; the token never appears in
+# remote URLs, git logs, or process lists.
+ASKPASS_FILE="$(mktemp /tmp/git-askpass-XXXXXX.sh)"
+cat > "$ASKPASS_FILE" << 'EOF'
+#!/bin/bash
+case "$1" in
+  Username*) echo "${GITEA_BOT_USERNAME}" ;;
+  Password*) echo "${GITEA_ACCESS_TOKEN}" ;;
+esac
+EOF
+chmod +x "$ASKPASS_FILE"
+export GIT_ASKPASS="$ASKPASS_FILE"
+
 claude --dangerously-skip-permissions \
     --mcp-config /etc/foundry/mcp-config.json \
     -p "$(jq -r '.directive' /foundry/instruction.json)"
@@ -555,7 +572,7 @@ All flags may also be supplied via environment variables (`GITEA_URL`, `GITEA_CO
 2. **Create temporary admin token** — single basic auth call to `POST /api/v1/users/{admin}/tokens`, named `foundry-setup-tmp`; all subsequent API calls use this token (Bearer auth)
 3. **Verify connectivity** — `GET /api/v1/version`; confirm Gitea is reachable and token is valid
 4. **Create bot user** — `POST /api/v1/admin/users`; skip if already exists; `must_change_password: false`
-5. **Create bot API token** — `POST /api/v1/users/{bot}/tokens`, named `foundry`; skip if token named `foundry` already exists; print full token once prominently to stdout. This token is used by `foundryd` and the container for Gitea API calls and git push over HTTP. If the token already exists, the secret value cannot be recovered via the API — the operator must delete and recreate it manually in Gitea if the original value was lost.
+5. **Create bot API token** — `POST /api/v1/users/{bot}/tokens`, named `foundry`, with `"scope": ["repository"]` in the request body (required for HTTP git clone/push); skip if token named `foundry` already exists; print full token once prominently to stdout. This token is used by `foundryd` and the container for Gitea API calls and git operations over HTTPS. If the token already exists, the secret value cannot be recovered via the API — the operator must delete and recreate it manually in Gitea if the original value was lost.
 6. **Register system webhook** — `POST /api/v1/admin/hooks`. Events: `issues`, `issue_comment`, `pull_request`, `pull_request_review`. If a webhook with the same URL already exists, update it; otherwise create it.
 7. **Delete temporary admin token** — `DELETE /api/v1/users/{admin}/tokens/{id}`; cleanup so no long-lived admin token persists
 8. **Print summary** — what was created, what was skipped, token (last 4 chars only if already existed, full value if newly created)
