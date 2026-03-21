@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the `foundry-runner` Docker image — the container that runs Claude Code with `foundry-mcp-gitea` configured as an MCP server for each turn.
+**Goal:** Build the `foundry-runner` Docker image — the container that runs Claude Code with `gitea-mcp` configured as an MCP server for each turn.
 
-**Architecture:** A multi-stage Dockerfile: stage 1 builds `foundry-mcp-gitea` in Rust, stage 2 is the runtime image with Node.js, Claude Code CLI, the MCP binary, and a non-root `foundry` user. An `entrypoint.sh` reads `instruction.json` from the mounted volume and passes the directive to `claude -p`.
+**Architecture:** A single-stage Dockerfile based on `node:22-slim` that installs Claude Code CLI, downloads the official `gitea-mcp` binary from the Gitea project, creates a non-root `foundry` user, and configures git defaults. An `entrypoint.sh` sets up `GIT_ASKPASS` for HTTPS git authentication, then passes the directive from `instruction.json` to `claude -p`.
 
 **Tech Stack:** Docker, Node.js (Claude Code), Rust (multi-stage build), bash
 
@@ -192,7 +192,7 @@ This file is placed on the `foundry-shared` Docker volume by the operator. Inclu
 }
 ```
 
-`gitea-mcp` inherits `GITEA_URL` and `GITEA_ACCESS_TOKEN` from the container environment — no need to specify them here.
+`gitea-mcp` inherits `GITEA_HOST` and `GITEA_ACCESS_TOKEN` from the container environment — no need to specify them here.
 
 - [ ] **Step 2: Commit**
 
@@ -286,7 +286,6 @@ cat > /tmp/foundry-test-vol/instruction.json << 'EOF'
   "phase": "planning",
   "repo": {"owner": "test", "repo": "test"},
   "issue_number": 1,
-  "branch_name": null,
   "pr_number": null,
   "directive": "Say hello and exit immediately."
 }
@@ -405,7 +404,7 @@ git commit -m "chore: final verification — all binaries built, all tests pass"
 
 Once all 5 plans are complete, verify the full system manually:
 
-1. Run `foundry-setup` against your Gitea instance
+1. Run `./scripts/gitea-init.sh` against your Gitea instance
 2. Copy the generated `FOUNDRY_GITEA_TOKEN` to your environment
 3. Copy `foundry-runner/mcp-config.json` to a Docker volume named `foundry-shared`
 4. Start `foundryd` with `foundry.toml` configured

@@ -86,9 +86,6 @@ authors = ["Foundry Bot <foundry@local>"]
 /target/
 **/*.rs.bk
 .env
-*.db
-*.db-shm
-*.db-wal
 ```
 
 > **Note:** `Cargo.lock` is intentionally NOT listed here. This is a workspace of binary crates — `Cargo.lock` should be committed to ensure reproducible builds.
@@ -218,9 +215,7 @@ mod tests {
         let session = IssueSession {
             key: IssueKey { owner: "bob".into(), repo: "repo".into(), issue_number: 7 },
             phase: IssuePhase::Planning,
-            branch_name: None,
             pr_number: None,
-            last_event_at: chrono::Utc::now(),
             container_running: false,
         };
         assert_eq!(session.volume_name("foundry-issue"), "foundry-issue__bob__repo__7");
@@ -241,7 +236,6 @@ Expected: compile errors (types not defined yet).
 
 ```rust
 // foundry-core/src/types.rs
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -270,12 +264,8 @@ impl IssueKey {
 pub struct IssueSession {
     pub key: IssueKey,
     pub phase: IssuePhase,
-    /// Set once Claude creates the branch (after /approve).
-    pub branch_name: Option<String>,
     /// Set once Claude opens the PR (read from result.json).
     pub pr_number: Option<u64>,
-    /// Timestamp of the most recently processed event for this issue.
-    pub last_event_at: DateTime<Utc>,
     /// True while a container is actively running for this issue.
     pub container_running: bool,
 }
@@ -565,12 +555,8 @@ pub enum ContainerError {
 
 #[derive(Debug, Error)]
 pub enum SessionStoreError {
-    #[error("Database error: {0}")]
-    Database(String),
     #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
-    #[error("Migration error: {0}")]
-    Migration(String),
+    Internal(String),
 }
 
 #[derive(Debug, Error)]
@@ -581,7 +567,7 @@ pub enum CodeHostError {
     RateLimited { retry_after_secs: Option<u64> },
     #[error("Not found: {0}")]
     NotFound(String),
-    #[error("Unauthorized — check GITEA_TOKEN")]
+    #[error("Unauthorized — check GITEA_ACCESS_TOKEN")]
     Unauthorized,
     #[error("Unexpected response: {0}")]
     UnexpectedResponse(String),
@@ -727,7 +713,7 @@ pub struct ContainerResult {
 #[async_trait]
 pub trait ContainerRuntime: Send + Sync + 'static {
     /// Run a container to completion. Returns when the container exits.
-    async fn run_container(&self, spec: ContainerSpec) -> Result<ContainerResult, ContainerError>;
+    async fn run_container(&self, spec: &ContainerSpec) -> Result<ContainerResult, ContainerError>;
 
     /// Ensure a named volume exists, creating it if absent.
     async fn ensure_volume(&self, name: &str) -> Result<(), ContainerError>;
@@ -774,7 +760,6 @@ pub trait ContainerRuntime: Send + Sync + 'static {
 use crate::errors::SessionStoreError;
 use crate::types::{IssueKey, IssueSession};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 
 #[async_trait]
 pub trait SessionStore: Send + Sync + 'static {
@@ -798,11 +783,6 @@ pub trait SessionStore: Send + Sync + 'static {
     /// Soft-delete a session (exclude from list()).
     async fn delete(&self, key: &IssueKey) -> Result<(), SessionStoreError>;
 
-    /// Get the global polling high-water mark (most recently processed event timestamp).
-    async fn get_poll_watermark(&self) -> Result<Option<DateTime<Utc>>, SessionStoreError>;
-
-    /// Set the global polling high-water mark.
-    async fn set_poll_watermark(&self, ts: DateTime<Utc>) -> Result<(), SessionStoreError>;
 }
 ```
 

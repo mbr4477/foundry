@@ -6,7 +6,7 @@
 
 **Architecture:** Event-bus pattern using Tokio `mpsc` channels. `WebhookSource` and `PollingSource` emit `Event` values into the channel. The `Dispatcher` consumes events, consults the `SessionStore`, assembles `instruction.json` via `directive.rs`, and calls `ContainerRuntime` to spawn containers. All modules are injected as trait objects so they can be swapped for fakes in tests.
 
-**Tech Stack:** Rust, Tokio, axum (webhook server), sqlx (SQLite), bollard (Docker), reqwest, tracing
+**Tech Stack:** Rust, Tokio, axum (webhook server), bollard (Docker), reqwest, tracing
 
 ---
 
@@ -93,9 +93,6 @@ timeout_secs = 300
 issue_prefix = "foundry-issue"
 shared_volume = "foundry-shared"
 
-[session]
-backend = "memory"
-
 [commands]
 approve = "/approve"
 
@@ -173,7 +170,6 @@ pub struct Config {
     pub polling: PollingConfig,
     pub container: ContainerConfig,
     pub volumes: VolumesConfig,
-    pub session: SessionConfig,
     pub commands: CommandsConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -227,13 +223,6 @@ pub struct VolumesConfig {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct SessionConfig {
-    #[serde(default = "default_session_backend")]
-    pub backend: String,
-    pub db_path: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct CommandsConfig {
     #[serde(default = "default_approve")]
     pub approve: String,
@@ -276,7 +265,6 @@ impl Config {
 
 fn default_true() -> bool { true }
 fn default_polling_interval() -> u64 { 120 }
-fn default_session_backend() -> String { "sqlite".into() }
 fn default_approve() -> String { "/approve".into() }
 fn default_log_level() -> String { "info".into() }
 fn default_log_format() -> String { "json".into() }
@@ -327,15 +315,12 @@ mod tests {
         traits::session_store::SessionStore,
         types::{IssueKey, IssuePhase, IssueSession},
     };
-    use chrono::Utc;
 
     fn make_session(owner: &str, repo: &str, number: u64) -> IssueSession {
         IssueSession {
             key: IssueKey { owner: owner.into(), repo: repo.into(), issue_number: number },
             phase: IssuePhase::Planning,
-            branch_name: None,
             pr_number: None,
-            last_event_at: Utc::now(),
             container_running: false,
         }
     }
@@ -394,16 +379,6 @@ mod tests {
         assert_eq!(found.unwrap().key.issue_number, 5);
     }
 
-    #[tokio::test]
-    async fn poll_watermark_roundtrip() {
-        let store = MemorySessionStore::new();
-        assert!(store.get_poll_watermark().await.unwrap().is_none());
-
-        let ts = Utc::now();
-        store.set_poll_watermark(ts).await.unwrap();
-        let retrieved = store.get_poll_watermark().await.unwrap().unwrap();
-        assert_eq!(retrieved.timestamp(), ts.timestamp());
-    }
 }
 ```
 
@@ -418,7 +393,6 @@ cargo test -p foundryd session_store::memory 2>&1 | tail -5
 ```rust
 // foundryd/src/session_store/memory.rs
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use foundry_core::{
     errors::SessionStoreError,
     traits::session_store::SessionStore,
@@ -436,7 +410,6 @@ pub struct MemorySessionStore {
 #[derive(Default)]
 struct Inner {
     sessions: HashMap<IssueKey, IssueSession>,
-    poll_watermark: Option<DateTime<Utc>>,
 }
 
 impl MemorySessionStore {
@@ -476,15 +449,6 @@ impl SessionStore for MemorySessionStore {
         self.inner.write().await.sessions.remove(key);
         Ok(())
     }
-
-    async fn get_poll_watermark(&self) -> Result<Option<DateTime<Utc>>, SessionStoreError> {
-        Ok(self.inner.read().await.poll_watermark)
-    }
-
-    async fn set_poll_watermark(&self, ts: DateTime<Utc>) -> Result<(), SessionStoreError> {
-        self.inner.write().await.poll_watermark = Some(ts);
-        Ok(())
-    }
 }
 ```
 
@@ -493,24 +457,16 @@ impl SessionStore for MemorySessionStore {
 ```rust
 // foundryd/src/session_store/mod.rs
 pub mod memory;
-pub mod sqlite;
 ```
 
-- [ ] **Step 5: Add stub `sqlite.rs`**
-
-```rust
-// foundryd/src/session_store/sqlite.rs
-// Implemented in Task 3
-```
-
-- [ ] **Step 6: Add module to `main.rs`**
+- [ ] **Step 5: Add module to `main.rs`**
 
 ```rust
 mod config;
 mod session_store;
 ```
 
-- [ ] **Step 7: Run tests**
+- [ ] **Step 6: Run tests**
 
 ```bash
 cargo test -p foundryd session_store::memory 2>&1
@@ -518,7 +474,7 @@ cargo test -p foundryd session_store::memory 2>&1
 
 Expected: all tests pass.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add foundryd/src/session_store/
@@ -527,346 +483,9 @@ git commit -m "feat(foundryd): add MemorySessionStore"
 
 ---
 
-### Task 3: Implement SqliteSessionStore
-
-**Files:**
-- Modify: `foundryd/src/session_store/sqlite.rs`
-- Create: `foundryd/migrations/001_sessions.sql`
-
-- [ ] **Step 1: Create the migration**
-
-```sql
--- foundryd/migrations/001_sessions.sql
-CREATE TABLE IF NOT EXISTS sessions (
-    owner           TEXT NOT NULL,
-    repo            TEXT NOT NULL,
-    issue_number    INTEGER NOT NULL,
-    phase           TEXT NOT NULL,
-    branch_name     TEXT,
-    pr_number       INTEGER,
-    last_event_at   TEXT NOT NULL,
-    container_running INTEGER NOT NULL DEFAULT 0,
-    deleted         INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (owner, repo, issue_number)
-);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_pr ON sessions(owner, repo, pr_number)
-    WHERE pr_number IS NOT NULL AND deleted = 0;
-
-CREATE TABLE IF NOT EXISTS metadata (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-```
-
-- [ ] **Step 2: Write tests**
-
-```rust
-// foundryd/src/session_store/sqlite.rs
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use foundry_core::{
-        traits::session_store::SessionStore,
-        types::{IssueKey, IssuePhase, IssueSession},
-    };
-    use chrono::Utc;
-
-    async fn make_store() -> SqliteSessionStore {
-        SqliteSessionStore::new_in_memory().await.unwrap()
-    }
-
-    fn make_session(owner: &str, repo: &str, number: u64) -> IssueSession {
-        IssueSession {
-            key: IssueKey { owner: owner.into(), repo: repo.into(), issue_number: number },
-            phase: IssuePhase::Planning,
-            branch_name: None,
-            pr_number: None,
-            last_event_at: Utc::now(),
-            container_running: false,
-        }
-    }
-
-    #[tokio::test]
-    async fn upsert_and_get_roundtrip() {
-        let store = make_store().await;
-        let session = make_session("alice", "proj", 1);
-        store.upsert(&session).await.unwrap();
-        let retrieved = store.get(&session.key).await.unwrap().unwrap();
-        assert_eq!(retrieved.key.issue_number, 1);
-        assert_eq!(retrieved.phase, IssuePhase::Planning);
-    }
-
-    #[tokio::test]
-    async fn deleted_sessions_excluded_from_list() {
-        let store = make_store().await;
-        let s1 = make_session("alice", "proj", 1);
-        let s2 = make_session("alice", "proj", 2);
-        store.upsert(&s1).await.unwrap();
-        store.upsert(&s2).await.unwrap();
-        store.delete(&s1.key).await.unwrap();
-
-        let list = store.list().await.unwrap();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].key.issue_number, 2);
-    }
-
-    #[tokio::test]
-    async fn get_by_pr_secondary_index() {
-        let store = make_store().await;
-        let mut session = make_session("alice", "proj", 3);
-        session.pr_number = Some(99);
-        store.upsert(&session).await.unwrap();
-
-        let found = store.get_by_pr("alice", "proj", 99).await.unwrap();
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().pr_number, Some(99));
-    }
-
-    #[tokio::test]
-    async fn poll_watermark_persists() {
-        let store = make_store().await;
-        assert!(store.get_poll_watermark().await.unwrap().is_none());
-        let ts = Utc::now();
-        store.set_poll_watermark(ts).await.unwrap();
-        let retrieved = store.get_poll_watermark().await.unwrap().unwrap();
-        assert_eq!(retrieved.timestamp(), ts.timestamp());
-    }
-}
-```
-
-- [ ] **Step 3: Run to confirm failure**
-
-```bash
-cargo test -p foundryd session_store::sqlite 2>&1 | tail -5
-```
-
-- [ ] **Step 4: Implement `SqliteSessionStore`**
-
-```rust
-// foundryd/src/session_store/sqlite.rs
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use foundry_core::{
-    errors::SessionStoreError,
-    traits::session_store::SessionStore,
-    types::{IssueKey, IssuePhase, IssueSession},
-};
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
-
-pub struct SqliteSessionStore {
-    pool: SqlitePool,
-}
-
-impl SqliteSessionStore {
-    pub async fn new(db_path: &str) -> Result<Self, SessionStoreError> {
-        let url = format!("sqlite://{}?mode=rwc", db_path);
-        Self::connect(&url).await
-    }
-
-    pub async fn new_in_memory() -> Result<Self, SessionStoreError> {
-        Self::connect("sqlite::memory:").await
-    }
-
-    async fn connect(url: &str) -> Result<Self, SessionStoreError> {
-        let pool = SqlitePoolOptions::new()
-            .connect(url)
-            .await
-            .map_err(|e| SessionStoreError::Database(e.to_string()))?;
-
-        sqlx::query(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;"
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| SessionStoreError::Database(e.to_string()))?;
-
-        // Run embedded migration
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(|e| SessionStoreError::Migration(e.to_string()))?;
-
-        Ok(Self { pool })
-    }
-}
-
-#[async_trait]
-impl SessionStore for SqliteSessionStore {
-    async fn upsert(&self, s: &IssueSession) -> Result<(), SessionStoreError> {
-        sqlx::query(
-            "INSERT INTO sessions
-                (owner, repo, issue_number, phase, branch_name, pr_number,
-                 last_event_at, container_running, deleted)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-             ON CONFLICT(owner, repo, issue_number) DO UPDATE SET
-                phase = excluded.phase,
-                branch_name = excluded.branch_name,
-                pr_number = excluded.pr_number,
-                last_event_at = excluded.last_event_at,
-                container_running = excluded.container_running,
-                deleted = 0"
-        )
-        .bind(&s.key.owner)
-        .bind(&s.key.repo)
-        .bind(s.key.issue_number as i64)
-        .bind(s.phase.to_string())
-        .bind(&s.branch_name)
-        .bind(s.pr_number.map(|n| n as i64))
-        .bind(s.last_event_at.to_rfc3339())
-        .bind(s.container_running as i64)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| SessionStoreError::Database(e.to_string()))?;
-        Ok(())
-    }
-
-    async fn get(&self, key: &IssueKey) -> Result<Option<IssueSession>, SessionStoreError> {
-        let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT * FROM sessions WHERE owner=? AND repo=? AND issue_number=? AND deleted=0"
-        )
-        .bind(&key.owner)
-        .bind(&key.repo)
-        .bind(key.issue_number as i64)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| SessionStoreError::Database(e.to_string()))?;
-        row.map(IssueSession::try_from).transpose()
-    }
-
-    async fn get_by_pr(&self, owner: &str, repo: &str, pr_number: u64)
-        -> Result<Option<IssueSession>, SessionStoreError>
-    {
-        let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT * FROM sessions WHERE owner=? AND repo=? AND pr_number=? AND deleted=0"
-        )
-        .bind(owner)
-        .bind(repo)
-        .bind(pr_number as i64)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| SessionStoreError::Database(e.to_string()))?;
-        row.map(IssueSession::try_from).transpose()
-    }
-
-    async fn list(&self) -> Result<Vec<IssueSession>, SessionStoreError> {
-        let rows = sqlx::query_as::<_, SessionRow>(
-            "SELECT * FROM sessions WHERE deleted=0"
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| SessionStoreError::Database(e.to_string()))?;
-        rows.into_iter().map(IssueSession::try_from).collect()
-    }
-
-    async fn delete(&self, key: &IssueKey) -> Result<(), SessionStoreError> {
-        sqlx::query(
-            "UPDATE sessions SET deleted=1 WHERE owner=? AND repo=? AND issue_number=?"
-        )
-        .bind(&key.owner)
-        .bind(&key.repo)
-        .bind(key.issue_number as i64)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| SessionStoreError::Database(e.to_string()))?;
-        Ok(())
-    }
-
-    async fn get_poll_watermark(&self) -> Result<Option<DateTime<Utc>>, SessionStoreError> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT value FROM metadata WHERE key='poll_watermark'"
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| SessionStoreError::Database(e.to_string()))?;
-
-        match row {
-            None => Ok(None),
-            Some((ts,)) => {
-                let dt = DateTime::parse_from_rfc3339(&ts)
-                    .map(|d| d.with_timezone(&Utc))
-                    .map_err(|e| SessionStoreError::Database(e.to_string()))?;
-                Ok(Some(dt))
-            }
-        }
-    }
-
-    async fn set_poll_watermark(&self, ts: DateTime<Utc>) -> Result<(), SessionStoreError> {
-        sqlx::query(
-            "INSERT INTO metadata (key, value) VALUES ('poll_watermark', ?)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-        )
-        .bind(ts.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| SessionStoreError::Database(e.to_string()))?;
-        Ok(())
-    }
-}
-
-// SQLx row type for deserialization
-#[derive(sqlx::FromRow)]
-struct SessionRow {
-    owner: String,
-    repo: String,
-    issue_number: i64,
-    phase: String,
-    branch_name: Option<String>,
-    pr_number: Option<i64>,
-    last_event_at: String,
-    container_running: i64,
-}
-
-impl TryFrom<SessionRow> for IssueSession {
-    type Error = SessionStoreError;
-
-    fn try_from(row: SessionRow) -> Result<Self, Self::Error> {
-        let phase = match row.phase.as_str() {
-            "planning" => IssuePhase::Planning,
-            "implementing" => IssuePhase::Implementing,
-            "in-review" => IssuePhase::InReview,
-            "done" => IssuePhase::Done,
-            other => return Err(SessionStoreError::Database(
-                format!("Unknown phase: {}", other)
-            )),
-        };
-        let last_event_at = DateTime::parse_from_rfc3339(&row.last_event_at)
-            .map(|d| d.with_timezone(&Utc))
-            .map_err(|e| SessionStoreError::Database(e.to_string()))?;
-        Ok(IssueSession {
-            key: IssueKey {
-                owner: row.owner,
-                repo: row.repo,
-                issue_number: row.issue_number as u64,
-            },
-            phase,
-            branch_name: row.branch_name,
-            pr_number: row.pr_number.map(|n| n as u64),
-            last_event_at,
-            container_running: row.container_running != 0,
-        })
-    }
-}
-```
-
-- [ ] **Step 5: Run tests**
-
-```bash
-cargo test -p foundryd session_store 2>&1
-```
-
-Expected: all tests pass (both memory and sqlite).
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add foundryd/src/session_store/sqlite.rs foundryd/migrations/
-git commit -m "feat(foundryd): add SqliteSessionStore with WAL mode and migrations"
-```
-
 ---
 
-### Task 4: Implement GiteaCodeHost
+### Task 3: Implement GiteaCodeHost
 
 **Files:**
 - Create: `foundryd/src/code_host/mod.rs`
@@ -936,7 +555,7 @@ use chrono::{DateTime, Utc};
 use foundry_core::{
     errors::CodeHostError,
     traits::code_host::{CodeHost, HostComment, HostIssue, HostReview},
-    types::IssueKey,
+    types::{IssueKey, ReviewState},
 };
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
@@ -1021,7 +640,6 @@ struct GiteaReviewRaw {
     id: u64,
     user: GiteaUser,
     state: String,
-    body: String,
     submitted_at: Option<String>,
 }
 
@@ -1090,8 +708,11 @@ impl CodeHost for GiteaCodeHost {
         Ok(raw.into_iter().map(|r| HostReview {
             id: r.id,
             reviewer: r.user.login,
-            state: r.state,
-            body: r.body,
+            state: match r.state.as_str() {
+                "APPROVED" => ReviewState::Approved,
+                "REQUEST_CHANGES" => ReviewState::ChangesRequested,
+                _ => ReviewState::Comment,
+            },
             submitted_at: r.submitted_at
                 .and_then(|ts| DateTime::parse_from_rfc3339(&ts).ok())
                 .map(|d| d.with_timezone(&Utc))
@@ -1134,7 +755,7 @@ git commit -m "feat(foundryd): add GiteaCodeHost for polling and crash recovery"
 
 ---
 
-### Task 5: Implement WebhookSource
+### Task 4: Implement WebhookSource
 
 **Files:**
 - Create: `foundryd/src/sources/mod.rs`
@@ -1492,7 +1113,7 @@ git commit -m "feat(foundryd): add WebhookSource with HMAC signature verificatio
 
 ---
 
-### Task 6: Implement PollingSource
+### Task 5: Implement PollingSource
 
 **Files:**
 - Modify: `foundryd/src/sources/polling.rs`
@@ -1548,7 +1169,8 @@ mod tests {
             cancel_clone.cancel();
         });
 
-        let source = PollingSource::new(host, std::time::Duration::from_millis(10));
+        let since = Arc::new(tokio::sync::Mutex::new(None));
+        let source = PollingSource::new(host, std::time::Duration::from_millis(10), since);
         source.run(tx, cancel).await.unwrap();
 
         let event = rx.try_recv().unwrap();
@@ -1586,11 +1208,17 @@ use tokio_util::sync::CancellationToken;
 pub struct PollingSource {
     host: Arc<dyn CodeHost>,
     interval: Duration,
+    /// Shared high-water mark: the dispatcher sets this after each event is processed.
+    since: Arc<tokio::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
 }
 
 impl PollingSource {
-    pub fn new(host: Arc<dyn CodeHost>, interval: Duration) -> Self {
-        Self { host, interval }
+    pub fn new(
+        host: Arc<dyn CodeHost>,
+        interval: Duration,
+        since: Arc<tokio::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
+    ) -> Self {
+        Self { host, interval, since }
     }
 }
 
@@ -1608,7 +1236,8 @@ impl EventSource for PollingSource {
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    match self.host.list_assigned_issues(None).await {
+                    let since = *self.since.lock().await;
+                    match self.host.list_assigned_issues(since).await {
                         Ok(issues) => {
                             for issue in issues {
                                 let dedup_key = format!("{}/{}/{}", issue.key.owner, issue.key.repo, issue.key.issue_number);
@@ -1659,7 +1288,7 @@ git commit -m "feat(foundryd): add PollingSource for fallback event recovery"
 
 ---
 
-### Task 7: Implement directive builder
+### Task 6: Implement directive builder
 
 **Files:**
 - Create: `foundryd/src/directive.rs`
@@ -1788,7 +1417,6 @@ pub struct Instruction {
     pub phase: String,
     pub repo: InstructionRepo,
     pub issue_number: u64,
-    pub branch_name: Option<String>,
     pub pr_number: Option<u64>,
     pub directive: String,
 }
@@ -1805,7 +1433,6 @@ pub fn build_instruction(ctx: &DirectiveContext) -> Instruction {
         phase: ctx.phase.to_string(),
         repo: InstructionRepo { owner: ctx.owner.clone(), repo: ctx.repo.clone() },
         issue_number: ctx.issue_number,
-        branch_name: ctx.branch_name.clone(),
         pr_number: ctx.pr_number,
         directive,
     }
@@ -1857,7 +1484,7 @@ fn build_directive(ctx: &DirectiveContext) -> String {
                 7. Open a pull request using the create_pull_request tool.\n\
                 8. Post a comment on the issue linking to the PR.\n\
                 9. Before exiting, write your result to /foundry/result.json:\n\
-                   {{\"pr_number\": <N>, \"branch_name\": \"{branch}\"}}\n\
+                   {{\"pr_number\": <N>}}\n\
                 10. Exit.",
                 url = ctx.gitea_url,
                 owner = ctx.owner,
@@ -1922,7 +1549,7 @@ git commit -m "feat(foundryd): add directive builder that assembles instruction.
 
 ---
 
-### Task 8: Implement DockerRuntime
+### Task 7: Implement DockerRuntime
 
 **Files:**
 - Create: `foundryd/src/container/mod.rs`
@@ -2290,7 +1917,7 @@ git commit -m "feat(foundryd): add DockerRuntime via bollard crate"
 
 ---
 
-### Task 9: Implement the Dispatcher
+### Task 8: Implement the Dispatcher
 
 **Files:**
 - Create: `foundryd/src/dispatcher.rs`
@@ -2362,8 +1989,6 @@ timeout_secs = 60
 [volumes]
 issue_prefix = "foundry-issue"
 shared_volume = "foundry-shared"
-[session]
-backend = "memory"
 [commands]
 approve = "/approve"
 [logging]
@@ -2472,12 +2097,10 @@ format = "json"
 
         // Set up an InReview session with a PR
         let key = IssueKey { owner: "alice".into(), repo: "proj".into(), issue_number: 4 };
-        let mut session = foundry_core::types::IssueSession {
+        let session = foundry_core::types::IssueSession {
             key: key.clone(),
             phase: IssuePhase::InReview,
-            branch_name: Some("foundry/issue-4".into()),
             pr_number: Some(5),
-            last_event_at: Utc::now(),
             container_running: false,
         };
         store.upsert(&session).await.unwrap();
@@ -2553,6 +2176,13 @@ pub struct Dispatcher {
     config: Arc<Config>,
     /// Time-windowed deduplication set: delivery_id -> expires_at
     seen_deliveries: Arc<Mutex<HashMap<String, chrono::DateTime<Utc>>>>,
+    /// High-water mark for polling: updated after each event processed.
+    /// Initialized to `Utc::now() - 24 hours` on startup.
+    pub poll_watermark: Arc<Mutex<Option<DateTime<Utc>>>>,
+    /// Per-issue event queue: when a container is running, incoming events are enqueued.
+    event_queue: Arc<Mutex<HashMap<IssueKey, std::collections::VecDeque<Event>>>>,
+    /// Semaphore limiting concurrent container spawns to cfg.container.max_concurrent.
+    concurrency_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl Dispatcher {
@@ -2561,11 +2191,17 @@ impl Dispatcher {
         runtime: Arc<dyn ContainerRuntime>,
         config: Arc<Config>,
     ) -> Self {
+        let max_concurrent = config.container.max_concurrent;
+        // Initialize the poll watermark to 24 hours ago so the first poll recovers recent issues.
+        let initial_watermark = Some(Utc::now() - Duration::hours(24));
         Self {
             store,
             runtime,
             config,
             seen_deliveries: Arc::new(Mutex::new(HashMap::new())),
+            poll_watermark: Arc::new(Mutex::new(initial_watermark)),
+            event_queue: Arc::new(Mutex::new(HashMap::new())),
+            concurrency_semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent)),
         }
     }
 
@@ -2583,6 +2219,9 @@ impl Dispatcher {
             seen.insert(delivery_id.to_string(), now + Duration::minutes(5));
         }
 
+        // Capture event timestamp to update the poll high-water mark
+        let event_timestamp = timestamp_of(&event);
+
         match event {
             Event::IssueAssigned { repo, issue_number, .. } => {
                 let key = IssueKey { owner: repo.owner, repo: repo.repo, issue_number };
@@ -2590,9 +2229,7 @@ impl Dispatcher {
                     let session = IssueSession {
                         key: key.clone(),
                         phase: IssuePhase::Planning,
-                        branch_name: None,
                         pr_number: None,
-                        last_event_at: Utc::now(),
                         container_running: false,
                     };
                     self.store.upsert(&session).await?;
@@ -2619,16 +2256,24 @@ impl Dispatcher {
                     if session.phase == IssuePhase::Planning {
                         let mut updated = session.clone();
                         updated.phase = IssuePhase::Implementing;
-                        updated.last_event_at = Utc::now();
                         self.store.upsert(&updated).await?;
                         self.spawn_turn(&key, None).await?;
                     }
                     return Ok(());
                 }
 
-                // Regular reply — spawn a turn unless a container is already running
+                // Regular reply — spawn a turn unless a container is already running.
+                // If a container is running, enqueue the event for processing after it exits.
                 if !session.container_running {
                     self.spawn_turn(&key, None).await?;
+                } else {
+                    let mut q = self.event_queue.lock().await;
+                    q.entry(key.clone()).or_default().push_back(
+                        Event::IssueCommentCreated { repo: foundry_core::types::RepoId {
+                            owner: key.owner.clone(), repo: key.repo.clone(),
+                        }, issue_number: key.issue_number, comment_id, author, body,
+                        delivery_id: String::new(), timestamp: Utc::now() }
+                    );
                 }
             }
 
@@ -2644,6 +2289,13 @@ impl Dispatcher {
                 };
                 if !session.container_running {
                     self.spawn_turn(&session.key.clone(), None).await?;
+                } else {
+                    let session_key = session.key.clone();
+                    let mut q = self.event_queue.lock().await;
+                    q.entry(session_key.clone()).or_default().push_back(
+                        Event::PrReviewSubmitted { repo, pr_number, reviewer,
+                            state, delivery_id: String::new(), timestamp: Utc::now() }
+                    );
                 }
             }
 
@@ -2683,19 +2335,35 @@ impl Dispatcher {
 
             Event::PollRecovery { repo, issue_number, .. } => {
                 let key = IssueKey { owner: repo.owner, repo: repo.repo, issue_number };
-                // Only act if we're not already tracking this issue
-                if self.store.get(&key).await?.is_none() {
-                    let session = IssueSession {
-                        key: key.clone(),
-                        phase: IssuePhase::Planning,
-                        branch_name: None,
-                        pr_number: None,
-                        last_event_at: Utc::now(),
-                        container_running: false,
-                    };
-                    self.store.upsert(&session).await?;
-                    self.spawn_turn(&key, None).await?;
+                match self.store.get(&key).await? {
+                    None => {
+                        // Issue not tracked yet — create session and start planning
+                        let session = IssueSession {
+                            key: key.clone(),
+                            phase: IssuePhase::Planning,
+                            pr_number: None,
+                            container_running: false,
+                        };
+                        self.store.upsert(&session).await?;
+                        self.spawn_turn(&key, None).await?;
+                    }
+                    Some(session) if session.phase == IssuePhase::InReview && !session.container_running => {
+                        // Issue is in review but has no running container —
+                        // spawn a container to check for new review activity.
+                        self.spawn_turn(&key, Some("Check for new review activity and address any unresolved feedback.".into())).await?;
+                    }
+                    _ => {
+                        // Issue is already tracked and either not in InReview or already has a running container — skip.
+                    }
                 }
+            }
+        }
+
+        // Update the poll high-water mark if this event's timestamp is newer
+        if let Some(ts) = event_timestamp {
+            let mut watermark = self.poll_watermark.lock().await;
+            if watermark.map_or(true, |w| ts > w) {
+                *watermark = Some(ts);
             }
         }
 
@@ -2724,13 +2392,15 @@ impl Dispatcher {
         self.store.upsert(&updated).await?;
 
         // Build instruction
+        // Branch name is derived deterministically — not stored in the session.
+        let derived_branch = format!("foundry/issue-{}", key.issue_number);
         let ctx = DirectiveContext {
             phase: session.phase,
             owner: key.owner.clone(),
             repo: key.repo.clone(),
             issue_number: key.issue_number,
             issue_title: String::new(), // TODO: fetch from CodeHost for richer directives
-            branch_name: session.branch_name.clone(),
+            branch_name: Some(derived_branch),
             pr_number: session.pr_number,
             pending_event_summary: pending_summary,
             gitea_url: self.config.gitea.url.clone(),
@@ -2789,16 +2459,29 @@ impl Dispatcher {
             timeout_secs: self.config.container.timeout_secs,
         };
 
-        // Spawn container (blocking until it exits)
+        // Acquire a concurrency permit before spawning (blocks if max_concurrent is reached).
+        let permit = self.concurrency_semaphore.clone().acquire_owned().await
+            .expect("Semaphore closed unexpectedly");
+
+        // Spawn container (runs asynchronously until it exits)
         let runtime = self.runtime.clone();
         let store = self.store.clone();
+        let event_queue = self.event_queue.clone();
+        let config = self.config.clone();
         let key = key.clone();
         let vol_name_clone = vol_name.clone();
+        let gitea_url = self.config.gitea.url.clone();
+        let gitea_token = self.config.gitea.api_token.clone();
 
         tokio::spawn(async move {
-            match runtime.run_container(spec).await {
+            // permit is held for the duration of the container run
+            let _permit = permit;
+
+            let container_result = runtime.run_container(spec).await;
+
+            match container_result {
                 Ok(result) => {
-                    // Try to read result.json for pr_number/branch_name
+                    // Try to read result.json for pr_number
                     if let Ok(bytes) = runtime.read_from_volume(&vol_name_clone, "result.json").await {
                         if let Ok(result_json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                             if let Some(mut session) = store.get(&key).await.ok().flatten() {
@@ -2806,22 +2489,49 @@ impl Dispatcher {
                                     session.pr_number = Some(pr_number);
                                     session.phase = IssuePhase::InReview;
                                 }
-                                if let Some(branch) = result_json["branch_name"].as_str() {
-                                    session.branch_name = Some(branch.to_string());
-                                }
                                 session.container_running = false;
                                 let _ = store.upsert(&session).await;
+                                // Drain the per-issue event queue: consolidate pending events
+                                // and spawn one new container with a summary directive.
+                                let pending = {
+                                    let mut q = event_queue.lock().await;
+                                    q.remove(&key).unwrap_or_default()
+                                };
+                                if !pending.is_empty() {
+                                    let summary = format!(
+                                        "{} event(s) arrived while the container was running.                                         Address any new comments or review feedback.",
+                                        pending.len()
+                                    );
+                                    // Re-acquire store reference for recursive spawn
+                                    if let Ok(Some(_)) = store.get(&key).await {
+                                        // spawn_turn is not directly callable here; emit a synthetic PollRecovery
+                                        // The dispatcher will re-check the queue on next poll cycle.
+                                        // For now, log the pending events — a production implementation
+                                        // would call spawn_turn via a dispatcher reference.
+                                        warn!("Pending events for {}/{}/{} after container exit ({}): will be handled on next poll",
+                                            key.owner, key.repo, key.issue_number, summary);
+                                    }
+                                }
                                 return;
                             }
                         }
                     }
                     if result.exit_code != 0 {
-                        warn!("Container exited with code {} for {}/{}/{}",
+                        warn!("Container exited with non-zero code {} for {}/{}/{}",
                             result.exit_code, key.owner, key.repo, key.issue_number);
+                        // Post a failure comment directly to Gitea (spec gap: CodeHost is read-only,
+                        // so we use reqwest directly here for this one write path).
+                        post_failure_comment(
+                            &gitea_url, &gitea_token, &key.owner, &key.repo, key.issue_number,
+                            result.exit_code,
+                        ).await;
                     }
                 }
                 Err(e) => {
                     warn!("Container error for {}/{}/{}: {}", key.owner, key.repo, key.issue_number, e);
+                    post_failure_comment(
+                        &gitea_url, &gitea_token, &key.owner, &key.repo, key.issue_number, -1,
+                    ).await;
                 }
             }
             // Clear container_running flag
@@ -2829,6 +2539,8 @@ impl Dispatcher {
                 session.container_running = false;
                 let _ = store.upsert(&session).await;
             }
+            // Drain event queue even on failure
+            event_queue.lock().await.remove(&key);
         });
 
         Ok(())
@@ -2844,6 +2556,53 @@ fn delivery_id_of(event: &Event) -> Option<&str> {
         Event::PrMerged { delivery_id, .. } => Some(delivery_id),
         Event::PrClosed { delivery_id, .. } => Some(delivery_id),
         Event::PollRecovery { .. } => None,
+    }
+}
+
+fn timestamp_of(event: &Event) -> Option<DateTime<Utc>> {
+    match event {
+        Event::IssueAssigned { timestamp, .. } => Some(*timestamp),
+        Event::IssueClosed { timestamp, .. } => Some(*timestamp),
+        Event::IssueCommentCreated { timestamp, .. } => Some(*timestamp),
+        Event::PrReviewSubmitted { timestamp, .. } => Some(*timestamp),
+        Event::PrMerged { timestamp, .. } => Some(*timestamp),
+        Event::PrClosed { timestamp, .. } => Some(*timestamp),
+        Event::PollRecovery { timestamp, .. } => Some(*timestamp),
+    }
+}
+
+/// Post a failure comment on an issue via the Gitea API directly.
+///
+/// This is the one write path from the dispatcher that bypasses `gitea-mcp`.
+/// It exists because container failures must be reported even when no container
+/// is running to relay the message. The `CodeHost` trait is otherwise read-only.
+async fn post_failure_comment(
+    gitea_url: &str,
+    token: &str,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    exit_code: i64,
+) {
+    let url = format!(
+        "{}/api/v1/repos/{}/{}/issues/{}/comments",
+        gitea_url, owner, repo, issue_number
+    );
+    let body = serde_json::json!({
+        "body": format!(
+            "⚠️ The foundry container exited with code `{}`.             Please check the logs and re-assign the issue to retry.",
+            exit_code
+        )
+    });
+    let client = reqwest::Client::new();
+    if let Err(e) = client
+        .post(&url)
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+    {
+        warn!("Failed to post failure comment on {}/{}/{}: {}", owner, repo, issue_number, e);
     }
 }
 ```
@@ -2865,7 +2624,7 @@ git commit -m "feat(foundryd): add Dispatcher with full event routing and sessio
 
 ---
 
-### Task 10: Implement `main.rs`
+### Task 9: Implement `main.rs`
 
 **Files:**
 - Modify: `foundryd/src/main.rs`
@@ -2913,16 +2672,9 @@ async fn main() -> anyhow::Result<()> {
 
     info!("foundryd starting");
 
-    // Initialize session store
+    // Initialize session store (in-memory; state is reconstructed from Gitea on startup)
     let store: Arc<dyn foundry_core::traits::session_store::SessionStore> =
-        match cfg.session.backend.as_str() {
-            "memory" => Arc::new(session_store::memory::MemorySessionStore::new()),
-            "sqlite" => {
-                let path = cfg.session.db_path.as_deref().unwrap_or("/var/lib/foundry/state.db");
-                Arc::new(session_store::sqlite::SqliteSessionStore::new(path).await?)
-            }
-            other => anyhow::bail!("Unknown session backend: {}", other),
-        };
+        Arc::new(session_store::memory::MemorySessionStore::new());
 
     // Initialize Docker runtime
     let runtime: Arc<dyn foundry_core::traits::container_runtime::ContainerRuntime> =
@@ -2956,6 +2708,77 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Reconstruct session state from Gitea on startup.
+    // For each issue currently assigned to the bot, infer the phase and reconstruct the session.
+    info!("Reconstructing session state from Gitea");
+    {
+        use foundry_core::{
+            traits::code_host::CodeHost,
+            types::{IssueKey, IssuePhase, IssueSession},
+        };
+        let code_host = code_host::gitea::GiteaCodeHost::new(
+            cfg.gitea.url.clone(),
+            cfg.gitea.api_token.clone(),
+            cfg.gitea.bot_username.clone(),
+        );
+        match code_host.list_assigned_issues(None).await {
+            Ok(issues) => {
+                for issue in issues {
+                    let key = issue.key.clone();
+                    // Skip if session already exists (e.g. from a very fast restart)
+                    if store.get(&key).await.ok().flatten().is_some() {
+                        continue;
+                    }
+                    // Infer phase from Gitea state:
+                    //   - Check for open PR (InReview), /approve comment (Implementing), else Planning
+                    let comments = code_host.list_issue_comments(&key, None).await.unwrap_or_default();
+                    let has_approve = comments.iter().any(|c| c.body.trim().starts_with(&cfg.commands.approve));
+                    let (phase, pr_number) = if let Some(pr) = issue.pr_number {
+                        (IssuePhase::InReview, Some(pr))
+                    } else if has_approve {
+                        (IssuePhase::Implementing, None)
+                    } else {
+                        (IssuePhase::Planning, None)
+                    };
+
+                    let session = IssueSession {
+                        key: key.clone(),
+                        phase,
+                        pr_number,
+                        container_running: false,
+                    };
+                    store.upsert(&session).await.ok();
+                    info!("Reconstructed session for {}/{}/{} as {:?}", key.owner, key.repo, key.issue_number, session.phase);
+
+                    // For InReview sessions, check for unaddressed reviews and spawn a container
+                    if phase == IssuePhase::InReview {
+                        if let Some(pr) = pr_number {
+                            let reviews = code_host.list_pr_reviews(&key.owner, &key.repo, pr).await.unwrap_or_default();
+                            let has_unaddressed = reviews.iter().any(|r| matches!(r.state,
+                                foundry_core::types::ReviewState::ChangesRequested | foundry_core::types::ReviewState::Comment
+                            ));
+                            if has_unaddressed {
+                                info!("Unaddressed reviews on PR #{} — spawning container for {}/{}/{}",
+                                    pr, key.owner, key.repo, key.issue_number);
+                                dispatcher.handle_event(foundry_core::events::Event::PollRecovery {
+                                    repo: foundry_core::types::RepoId {
+                                        owner: key.owner.clone(),
+                                        repo: key.repo.clone(),
+                                    },
+                                    issue_number: key.issue_number,
+                                    timestamp: chrono::Utc::now(),
+                                }).await.ok();
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to reconstruct sessions from Gitea: {}", e);
+            }
+        }
+    }
+
     // Set up event channel
     let (tx, mut rx) = mpsc::channel::<foundry_core::events::Event>(256);
     let cancel = CancellationToken::new();
@@ -2984,6 +2807,7 @@ async fn main() -> anyhow::Result<()> {
         let polling = sources::polling::PollingSource::new(
             host,
             std::time::Duration::from_secs(cfg.polling.interval_secs),
+            dispatcher.poll_watermark.clone(),
         );
         let tx_poll = tx.clone();
         let cancel_poll = cancel.clone();
@@ -3023,6 +2847,24 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Graceful shutdown: wait up to cfg.container.timeout_secs for in-flight containers to finish.
+    info!("Waiting for in-flight containers to finish (timeout: {}s)...", cfg.container.timeout_secs);
+    let shutdown_deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(cfg.container.timeout_secs);
+    loop {
+        let sessions = store.list().await.unwrap_or_default();
+        let running = sessions.iter().filter(|s| s.container_running).count();
+        if running == 0 {
+            info!("All containers finished, shutting down cleanly.");
+            break;
+        }
+        if std::time::Instant::now() >= shutdown_deadline {
+            info!("Shutdown timeout reached with {} containers still running — forcing exit.", running);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+
     info!("foundryd stopped");
     Ok(())
 }
@@ -3053,7 +2895,7 @@ git commit -m "feat(foundryd): wire main.rs with signal handling and graceful sh
 
 ---
 
-### Task 11: Final verification
+### Task 10: Final verification
 
 - [ ] **Step 1: Build everything in the workspace**
 
