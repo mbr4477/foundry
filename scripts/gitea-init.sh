@@ -106,12 +106,12 @@ api_call() {
 echo "[1/8] Creating Gitea admin user @${ADMIN_USERNAME}..."
 
 # Check if user already exists via docker exec
-if docker exec "$GITEA_CONTAINER" \
+if docker exec --user git "$GITEA_CONTAINER" \
        gitea admin user list --admin 2>/dev/null \
        | grep -q "^[0-9]\+[[:space:]]\+${ADMIN_USERNAME}[[:space:]]"; then
     echo "       Already exists — skipped."
 else
-    docker exec "$GITEA_CONTAINER" gitea admin user create \
+    docker exec --user git "$GITEA_CONTAINER" gitea admin user create \
         --username "$ADMIN_USERNAME" \
         --password "$ADMIN_PASSWORD" \
         --email    "$ADMIN_EMAIL" \
