@@ -23,6 +23,8 @@ services:
       - ./config/gitea/app.ini:/data/gitea/conf/app.ini
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "3000:3000"
       - "2222:22"
