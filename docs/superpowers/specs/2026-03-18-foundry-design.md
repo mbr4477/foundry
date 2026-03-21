@@ -19,9 +19,11 @@ Receives Gitea events (via webhook and polling), manages per-issue session state
 
 Does NOT: call the Gitea API for issue operations, merge PRs, hold long-lived containers, or make workflow decisions beyond phase routing.
 
-### `foundry-mcp-gitea` — Gitea MCP Server (Rust)
+### `gitea-mcp` — Gitea MCP Server (official binary)
 
-A standalone MCP server (stdio JSON-RPC) that runs inside each container. Wraps the Gitea REST API into typed tools for Claude Code. Stateless — no persistence between container invocations.
+The official MCP server from the Gitea project, run as a stdio subprocess inside each container. Wraps the Gitea REST API into tools for Claude Code. Stateless — no persistence between container invocations.
+
+Claude Code's allow-list permission rules restrict it to exactly the tools Foundry requires; all other gitea-mcp tools (merge, delete, admin, etc.) are blocked at the permissions layer.
 
 Does NOT: handle events, manage containers, or make decisions.
 
@@ -314,7 +316,7 @@ If a container exceeds `timeout_secs`, or exits with a non-zero exit code, the d
 ### Image (`foundry-runner`)
 
 - Node.js + Claude Code CLI (`@anthropic-ai/claude-code`)
-- `foundry-mcp-gitea` binary at `/usr/local/bin/`
+- `gitea-mcp` binary at `/usr/local/bin/` (official binary from the Gitea project)
 - `git`, `jq`, standard build tools
 - Non-root user `foundry` (UID 1000) — Claude Code refuses `--dangerously-skip-permissions` when running as root. The container runs as `foundry` by default (`USER foundry` in the Dockerfile). All relevant paths (`/foundry/`, `/etc/foundry/`, `HOME`) must be readable by this user.
 
@@ -385,15 +387,35 @@ The dispatcher reads this file after the container exits to update session state
 {
   "mcpServers": {
     "gitea": {
-      "command": "/usr/local/bin/foundry-mcp-gitea",
-      "args": [],
-      "env": {}
+      "command": "/usr/local/bin/gitea-mcp",
+      "args": ["-t", "stdio"],
+      "env": {
+        "GITEA_HOST": "${GITEA_URL}",
+        "GITEA_ACCESS_TOKEN": "${GITEA_TOKEN}"
+      }
     }
+  },
+  "permissions": {
+    "deny": ["mcp__gitea__*"],
+    "allow": [
+      "mcp__gitea__get_issue_by_index",
+      "mcp__gitea__get_issue_comments_by_index",
+      "mcp__gitea__create_issue_comment",
+      "mcp__gitea__edit_issue",
+      "mcp__gitea__create_pull_request",
+      "mcp__gitea__get_pull_request_by_index",
+      "mcp__gitea__get_pull_request_diff",
+      "mcp__gitea__list_pull_request_reviews",
+      "mcp__gitea__list_pull_request_review_comments",
+      "mcp__gitea__create_pull_request_review",
+      "mcp__gitea__submit_pull_request_review",
+      "mcp__gitea__get_my_user_info"
+    ]
   }
 }
 ```
 
-`foundry-mcp-gitea` inherits the container's environment for `GITEA_URL` and `GITEA_TOKEN`.
+`gitea-mcp` uses `GITEA_HOST` and `GITEA_ACCESS_TOKEN` as its env var names. These are remapped from the container's `GITEA_URL` and `GITEA_TOKEN` in the `env` block above — Claude Code passes these when spawning the stdio subprocess.
 
 ### Network Isolation
 
@@ -403,24 +425,27 @@ Containers are attached to `foundry-net` — a Docker network with access only t
 
 ## MCP Server Tools
 
+These are the gitea-mcp tool names Claude Code is permitted to call (via the allow-list in `mcp-config.json`). All other gitea-mcp tools are blocked.
+
 ### Issues
-- `get_issue(owner, repo, issue_number)` — full issue body and metadata
-- `list_issue_comments(owner, repo, issue_number, since?)` — chronological
-- `create_issue_comment(owner, repo, issue_number, body)` — post a comment
-- `edit_issue(owner, repo, issue_number, title?, body?, state?)` — update issue
+- `get_issue_by_index` — full issue body and metadata
+- `get_issue_comments_by_index` — chronological comments
+- `create_issue_comment` — post a comment on an issue or PR (PRs are issues in Gitea)
+- `edit_issue` — update issue title, body, or state
 
 ### Pull Requests
-- `create_pull_request(owner, repo, title, body, head, base)` — open a PR
-- `update_pull_request(owner, repo, pr_number, title?, body?)` — edit PR
-- `get_pull_request(owner, repo, pr_number)` — fetch PR metadata
-- `list_pr_reviews(owner, repo, pr_number)` — all reviews
-- `list_pr_review_comments(owner, repo, pr_number, review_id)` — inline comments
-- `create_pr_comment(owner, repo, pr_number, body)` — general PR comment
-- `reply_to_pr_comment(owner, repo, pr_number, comment_id, body)` — reply inline
+- `create_pull_request` — open a PR
+- `get_pull_request_by_index` — fetch PR metadata
+- `get_pull_request_diff` — view the diff
+- `list_pull_request_reviews` — all submitted reviews
+- `list_pull_request_review_comments` — inline comments on a review
+- `create_pull_request_review` — draft a review with inline comments
+- `submit_pull_request_review` — submit a drafted review
 
-### Repository
-- `get_repo(owner, repo)` — default branch, description
-- `get_authenticated_user()` — bot's own username
+### User
+- `get_my_user_info` — bot's own username
+
+Note: the Gitea API does not support replying to individual review comment threads. Claude responds to reviewer feedback by submitting a new review or posting a general comment via `create_issue_comment`.
 
 Claude uses the `git` CLI directly (via its built-in Bash tool) for all Git operations. The MCP server only wraps the Gitea REST API.
 
