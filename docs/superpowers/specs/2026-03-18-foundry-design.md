@@ -97,20 +97,20 @@ pub trait CodeHost: Send + Sync + 'static {
     async fn list_assigned_issues(
         &self,
         since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<ForgeIssue>, CodeHostError>;
+    ) -> Result<Vec<HostIssue>, CodeHostError>;
 
     async fn list_issue_comments(
         &self,
         key: &IssueKey,
         since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<ForgeComment>, CodeHostError>;
+    ) -> Result<Vec<HostComment>, CodeHostError>;
 
     async fn list_pr_reviews(
         &self,
         owner: &str,
         repo: &str,
         pr_number: u64,
-    ) -> Result<Vec<ForgeReview>, CodeHostError>;
+    ) -> Result<Vec<HostReview>, CodeHostError>;
 }
 ```
 
@@ -119,19 +119,19 @@ Used by `foundryd` only for polling/recovery. All writes go through the MCP serv
 ### `CodeHost` Return Types
 
 ```rust
-pub struct ForgeIssue {
+pub struct HostIssue {
     pub key: IssueKey,
     pub pr_number: Option<u64>,  // set if an open PR exists for this issue
 }
 
-pub struct ForgeComment {
+pub struct HostComment {
     pub id: u64,
     pub author: String,
     pub body: String,
     pub created_at: DateTime<Utc>,
 }
 
-pub struct ForgeReview {
+pub struct HostReview {
     pub id: u64,
     pub reviewer: String,
     pub state: ReviewState,
@@ -139,7 +139,7 @@ pub struct ForgeReview {
 }
 ```
 
-`ForgeIssue.pr_number` is populated from Gitea's issue API, which includes a linked PR reference. During startup reconstruction, this is how `foundryd` recovers `session.pr_number` for `InReview` sessions — no separate PR lookup is needed.
+`HostIssue.pr_number` is populated from Gitea's issue API, which includes a linked PR reference. During startup reconstruction, this is how `foundryd` recovers `session.pr_number` for `InReview` sessions — no separate PR lookup is needed.
 
 `list_pr_reviews` is used during startup reconstruction only: after identifying an `InReview` session, `foundryd` calls it to check whether any unaddressed reviews exist, and if so spawns a container immediately to handle them rather than waiting for the next event.
 
