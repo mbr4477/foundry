@@ -29,9 +29,11 @@ Does NOT: handle events, manage containers, or make decisions.
 
 > **Note:** Plan 2 (`2026-03-18-plan-2-mcp-gitea.md`), which described building a custom Rust MCP server, is superseded by this decision. Do not execute it.
 
-### `foundry-setup` — Initialization CLI (Rust)
+### `scripts/gitea-init.sh` — Gitea Initialization Script (bash)
 
-One-shot, idempotent CLI that initializes Gitea: creates the bot user, generates an API token, registers a system-level webhook, and creates a Docker network. Safe to re-run.
+One-shot, idempotent bash script that initializes a fresh Gitea instance for Foundry: creates the Gitea admin user, creates the bot user, generates a bot API token, and registers a system-level webhook. Safe to re-run.
+
+> **Note:** Plan 4 (`2026-03-18-plan-4-setup.md`), which described building a Rust binary for this purpose, is superseded by this decision. Do not execute it.
 
 ### Ephemeral Container — Claude Code Runtime
 
@@ -528,27 +530,39 @@ Secrets are never written to the TOML directly — always interpolated from envi
 
 ---
 
-## Setup Script (`foundry-setup`)
+## Gitea Initialization Script (`scripts/gitea-init.sh`)
 
-Idempotent. Safe to re-run.
+Idempotent. Safe to re-run. Requires `curl`, `jq`, and `docker` on the operator's machine.
 
 ```bash
-foundry-setup \
-  --config foundry.toml \
-  --admin-token gta_admin_...
+./scripts/gitea-init.sh \
+  --gitea-container gitea \
+  --gitea-url https://gitea.local \
+  --admin-username gitea-admin \
+  --admin-password <password> \
+  --admin-email admin@gitea.local \
+  --webhook-url http://foundry:8477/webhook \
+  --webhook-secret <secret> \
+  [--bot-username foundry-bot] \
+  [--bot-email foundry-bot@gitea.local]
 ```
+
+All flags may also be supplied via environment variables (`GITEA_URL`, `GITEA_CONTAINER`, `FOUNDRY_ADMIN_USERNAME`, `FOUNDRY_ADMIN_PASSWORD`, `FOUNDRY_ADMIN_EMAIL`, `FOUNDRY_WEBHOOK_URL`, `FOUNDRY_WEBHOOK_SECRET`, `FOUNDRY_BOT_USERNAME`, `FOUNDRY_BOT_EMAIL`). Flags take precedence over env vars.
 
 **Steps:**
 
-1. **Verify connectivity** — confirm Gitea is reachable and admin token is valid
-2. **Create bot user** — skip if already exists; `must_change_password: false`
-3. **Generate bot API token** — scopes: `read:issue`, `write:issue`, `read:repository`, `write:repository`, `read:user`. Print once. Skip if token named `foundry` already exists. This token is used by the bot for API calls and git push over HTTP — it does not require admin scope. The `--admin-token` flag is a separate credential used only during setup.
-4. **Create system-level webhook** — `POST /api/v1/admin/hooks`. Single hook covers all repos. Events: `issues`, `issue_comment`, `pull_request`, `pull_request_review`. Update if already registered.
-5. **Create Docker network** — `docker network create foundry-net` if it doesn't already exist. Skip if present.
-6. **Create shared Docker volume** — `docker volume create foundry-shared` if it doesn't already exist. Skip if present.
-7. **Print summary** — what was created, what was skipped, token (last 4 chars only)
+1. **Create Gitea admin user** — `docker exec $GITEA_CONTAINER gitea admin user create --admin`; skip if already exists
+2. **Create temporary admin token** — single basic auth call to `POST /api/v1/users/{admin}/tokens`, named `foundry-setup-tmp`; all subsequent API calls use this token (Bearer auth)
+3. **Verify connectivity** — `GET /api/v1/version`; confirm Gitea is reachable and token is valid
+4. **Create bot user** — `POST /api/v1/admin/users`; skip if already exists; `must_change_password: false`
+5. **Create bot API token** — `POST /api/v1/users/{bot}/tokens`, named `foundry`; skip if token named `foundry` already exists; print full token once prominently to stdout. This token is used by `foundryd` and the container for Gitea API calls and git push over HTTP.
+6. **Register system webhook** — `POST /api/v1/admin/hooks`. Events: `issues`, `issue_comment`, `pull_request`, `pull_request_review`. If a webhook with the same URL already exists, update it; otherwise create it.
+7. **Delete temporary admin token** — `DELETE /api/v1/users/{admin}/tokens/{id}`; cleanup so no long-lived admin token persists
+8. **Print summary** — what was created, what was skipped, token (last 4 chars only if already existed, full value if newly created)
 
-Bot collaborator access on individual repos is managed manually by admins — not by `foundry-setup`.
+Docker network and volume creation are not part of this script — those are handled by `docker-compose.yml`.
+
+Bot collaborator access on individual repos is managed manually by admins — not by `gitea-init.sh`.
 
 ---
 
