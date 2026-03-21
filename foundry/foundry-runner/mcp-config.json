@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "gitea": {
+      "command": "/usr/local/bin/gitea-mcp",
+      "args": ["-t", "stdio"],
+      "env": {}
+    }
+  }
+}
