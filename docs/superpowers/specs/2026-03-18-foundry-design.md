@@ -547,7 +547,7 @@ Idempotent. Safe to re-run. Requires `curl`, `jq`, and `docker` on the operator'
   [--bot-email foundry-bot@gitea.local]
 ```
 
-All flags may also be supplied via environment variables (`GITEA_URL`, `GITEA_CONTAINER`, `FOUNDRY_ADMIN_USERNAME`, `FOUNDRY_ADMIN_PASSWORD`, `FOUNDRY_ADMIN_EMAIL`, `FOUNDRY_WEBHOOK_URL`, `FOUNDRY_WEBHOOK_SECRET`, `FOUNDRY_BOT_USERNAME`, `FOUNDRY_BOT_EMAIL`). Flags take precedence over env vars.
+All flags may also be supplied via environment variables (`GITEA_URL`, `GITEA_CONTAINER`, `FOUNDRY_ADMIN_USERNAME`, `FOUNDRY_ADMIN_PASSWORD`, `FOUNDRY_ADMIN_EMAIL`, `FOUNDRY_WEBHOOK_URL`, `FOUNDRY_WEBHOOK_SECRET`, `FOUNDRY_BOT_USERNAME`, `FOUNDRY_BOT_EMAIL`). Flags take precedence over env vars. Note: `GITEA_URL` here is the same Gitea instance URL passed as `GITEA_HOST` in the container runtime environment — the names differ because the script and the container runtime are separate consumers.
 
 **Steps:**
 
@@ -555,7 +555,7 @@ All flags may also be supplied via environment variables (`GITEA_URL`, `GITEA_CO
 2. **Create temporary admin token** — single basic auth call to `POST /api/v1/users/{admin}/tokens`, named `foundry-setup-tmp`; all subsequent API calls use this token (Bearer auth)
 3. **Verify connectivity** — `GET /api/v1/version`; confirm Gitea is reachable and token is valid
 4. **Create bot user** — `POST /api/v1/admin/users`; skip if already exists; `must_change_password: false`
-5. **Create bot API token** — `POST /api/v1/users/{bot}/tokens`, named `foundry`; skip if token named `foundry` already exists; print full token once prominently to stdout. This token is used by `foundryd` and the container for Gitea API calls and git push over HTTP.
+5. **Create bot API token** — `POST /api/v1/users/{bot}/tokens`, named `foundry`; skip if token named `foundry` already exists; print full token once prominently to stdout. This token is used by `foundryd` and the container for Gitea API calls and git push over HTTP. If the token already exists, the secret value cannot be recovered via the API — the operator must delete and recreate it manually in Gitea if the original value was lost.
 6. **Register system webhook** — `POST /api/v1/admin/hooks`. Events: `issues`, `issue_comment`, `pull_request`, `pull_request_review`. If a webhook with the same URL already exists, update it; otherwise create it.
 7. **Delete temporary admin token** — `DELETE /api/v1/users/{admin}/tokens/{id}`; cleanup so no long-lived admin token persists
 8. **Print summary** — what was created, what was skipped, token (last 4 chars only if already existed, full value if newly created)
