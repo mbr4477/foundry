@@ -18,14 +18,9 @@ services:
     environment:
       - USER_UID=1000
       - USER_GID=1000
-      - GITEA__database__DB_TYPE=sqlite3
-      - GITEA__server__DOMAIN=localhost
-      - GITEA__server__HTTP_PORT=3000
-      - GITEA__server__ROOT_URL=http://localhost:3000/
-      - GITEA__webhook__ALLOWED_HOST_LIST=foundryd,localhost,*
-      - GITEA__webhook__SKIP_TLS_VERIFY=true
     volumes:
       - gitea-data:/data
+      - ./config/gitea/app.ini:/data/gitea/conf/app.ini:ro
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     ports:
