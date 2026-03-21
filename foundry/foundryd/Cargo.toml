@@ -1,0 +1,8 @@
+[package]
+name = "foundryd"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "foundryd"
+path = "src/main.rs"
