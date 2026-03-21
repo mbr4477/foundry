@@ -15,7 +15,7 @@ Four distinct processes:
 
 ### `foundryd` — Orchestrator Daemon (Rust)
 
-Receives Gitea events (via webhook and polling), manages per-issue session state, assembles structured directives, and spawns ephemeral Docker containers. Contains no AI or Gitea write logic — those live in the container.
+Receives Gitea events (via webhook and polling), manages in-memory per-issue session state, assembles structured directives, and spawns ephemeral Docker containers. Contains no AI or Gitea write logic — those live in the container.
 
 Does NOT: call the Gitea API for issue operations, merge PRs, hold long-lived containers, or make workflow decisions beyond phase routing.
 
@@ -35,7 +35,7 @@ One-shot, idempotent CLI that initializes Gitea: creates the bot user, generates
 
 ### Ephemeral Container — Claude Code Runtime
 
-Runs Claude Code with `gitea-mcp` configured as an MCP server. Launched per turn, exits when Claude finishes. All state lives in Gitea and the `foundryd` session store — the container filesystem is discarded on exit.
+Runs Claude Code with `gitea-mcp` configured as an MCP server. Launched per turn, exits when Claude finishes. All persistent state lives in Gitea — the container filesystem and `foundryd`'s in-memory session store are both ephemeral.
 
 ---
 
@@ -85,7 +85,7 @@ pub trait SessionStore: Send + Sync + 'static {
 }
 ```
 
-Implementations: `SqliteSessionStore` (WAL mode), `MemorySessionStore` (tests).
+Implementation: `MemorySessionStore` (in-memory `HashMap`, used in both production and tests). State is always reconstructed from Gitea on startup.
 
 ### `CodeHost`
 
@@ -128,9 +128,7 @@ pub struct IssueKey {
 pub struct IssueSession {
     pub key: IssueKey,
     pub phase: IssuePhase,
-    pub branch_name: Option<String>,  // set once Claude creates the branch
     pub pr_number: Option<u64>,       // set once Claude opens the PR
-    pub last_event_at: DateTime<Utc>,
     pub container_running: bool,
 }
 
@@ -144,9 +142,9 @@ pub enum IssuePhase {
 
 `volume_name` is not stored — derived deterministically as `foundry-issue__{owner}__{repo}__{N}` (double underscore separators throughout, since Gitea usernames and repo names cannot contain `__`).
 
-### Crash Recovery
+### Startup Reconstruction
 
-The session store is a cache, not the source of truth. On startup (or if the DB is cleared), `foundryd` scans Gitea for all issues assigned to the bot and reconstructs state:
+The session store is in-memory only. On every startup, `foundryd` scans Gitea for all issues assigned to the bot and reconstructs state:
 
 | Gitea state | Inferred phase |
 |---|---|
@@ -232,7 +230,7 @@ Webhooks and polling can produce duplicate events. The dispatcher deduplicates u
 - Webhook events: keyed by `delivery_id` (Gitea sets `X-Gitea-Delivery` on every webhook POST)
 - `PollRecovery` events: keyed by `(repo, issue_number, timestamp)` truncated to the polling interval
 
-The polling `since` anchor is a global high-water mark: the timestamp of the most recently processed event across all issues, persisted in the session store. On first run (or after DB loss), polling starts from 24 hours ago.
+The polling `since` anchor is a global high-water mark: the timestamp of the most recently processed event across all issues, held in memory. On startup, polling starts from 24 hours ago. The deduplication window handles any events re-observed after a restart.
 
 ### Known Limitations (v1)
 
@@ -266,11 +264,11 @@ The polling `since` anchor is a global high-water mark: the timestamp of the mos
 2. Dispatcher: transitions session to `Implementing`, calls `session_store.upsert()`
 3. Writes directive: *"Your plan is approved. Create branch `foundry/issue-{N}`, implement the changes, write tests, open a PR, post a comment on the issue linking to it. Before exiting, write your result to `/foundry/result.json`."*
 4. Spawns container → Claude clones repo, creates branch, implements, pushes, opens PR via MCP, writes `result.json`, exits
-5. Dispatcher: reads `result.json` from volume, saves `session.pr_number` and `session.branch_name`, transitions to `InReview`
+5. Dispatcher: reads `result.json` from volume, saves `session.pr_number`, transitions to `InReview`
 
 `result.json` structure:
 ```json
-{ "pr_number": 7, "branch_name": "foundry/issue-42" }
+{ "pr_number": 7 }
 ```
 
 This eliminates the race condition between PR creation and incoming review events — `pr_number` is captured synchronously before the dispatcher processes any further events.
@@ -365,7 +363,6 @@ claude --dangerously-skip-permissions \
   "phase": "planning",
   "repo": { "owner": "alice", "repo": "myproject" },
   "issue_number": 42,
-  "branch_name": null,
   "pr_number": null,
   "directive": "You are a software developer assigned to issue #42 in alice/myproject...\n\n[full structured prompt]"
 }
@@ -378,10 +375,10 @@ The directive is a fully-formed prompt assembled by the dispatcher. It includes 
 Written by Claude to `/foundry/result.json` before exiting on turns that produce a PR:
 
 ```json
-{ "pr_number": 7, "branch_name": "foundry/issue-42" }
+{ "pr_number": 7 }
 ```
 
-The dispatcher reads this file after the container exits to update session state. If the file is absent (e.g., Claude did not open a PR this turn), the dispatcher treats `pr_number` and `branch_name` as unchanged.
+The dispatcher reads this file after the container exits to update session state. If the file is absent (e.g., Claude did not open a PR this turn), the dispatcher treats `pr_number` as unchanged.
 
 ### MCP Config (`/etc/foundry/mcp-config.json`)
 
@@ -484,10 +481,6 @@ timeout_secs = 1800
 issue_prefix = "foundry-issue"
 shared_volume = "foundry-shared"
 
-[session]
-backend = "sqlite"       # "sqlite" or "memory"
-db_path = "/var/lib/foundry/state.db"
-
 [commands]
 approve = "/approve"
 
@@ -527,5 +520,4 @@ Bot collaborator access on individual repos is managed manually by admins — no
 On SIGTERM:
 1. Stop accepting new webhooks
 2. Wait for running containers to finish (up to `timeout_secs`)
-3. Persist all session state
-4. Exit
+3. Exit
