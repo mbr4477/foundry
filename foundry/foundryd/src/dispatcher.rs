@@ -310,6 +310,8 @@ impl Dispatcher {
         env.insert("GITEA_BOT_USERNAME".to_string(), self.config.gitea.bot_username.clone());
         env.insert("GIT_AUTHOR_NAME".to_string(), self.config.gitea.bot_display_name.clone());
         env.insert("GIT_AUTHOR_EMAIL".to_string(), self.config.gitea.bot_email.clone());
+        env.insert("GIT_COMMITTER_NAME".into(), self.config.gitea.bot_display_name.clone());
+        env.insert("GIT_COMMITTER_EMAIL".into(), self.config.gitea.bot_email.clone());
         // ANTHROPIC_API_KEY may be passed through the environment
         if let Ok(key_val) = std::env::var("ANTHROPIC_API_KEY") {
             env.insert("ANTHROPIC_API_KEY".to_string(), key_val);
