@@ -91,7 +91,7 @@ impl CodeHost for GiteaCodeHost {
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<HostIssue>, CodeHostError> {
         let mut url = format!(
-            "{}/api/v1/issues?type=assigned&state=open&limit=50",
+            "{}/api/v1/repos/issues/search?type=assigned&state=open&limit=50",
             self.base_url
         );
         if let Some(since_dt) = since {
