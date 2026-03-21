@@ -90,17 +90,20 @@ impl CodeHost for GiteaCodeHost {
         &self,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<HostIssue>, CodeHostError> {
-        let mut url = format!(
-            "{}/api/v1/repos/issues/search?type=assigned&state=open&limit=50",
-            self.base_url
-        );
+        let url = format!("{}/api/v1/repos/issues/search", self.base_url);
+        let mut query = vec![
+            ("type", "issues".to_string()),
+            ("assigned", "true".to_string()),
+            ("state", "open".to_string()),
+        ];
         if let Some(since_dt) = since {
-            url.push_str(&format!("&since={}", since_dt.to_rfc3339()));
+            query.push(("since", since_dt.to_rfc3339()));
         }
 
         let resp = self
             .client
             .get(&url)
+            .query(&query)
             .header("Authorization", format!("token {}", self.token))
             .send()
             .await
@@ -110,10 +113,7 @@ impl CodeHost for GiteaCodeHost {
             return Err(CodeHostError::Unauthorized);
         }
         if !resp.status().is_success() {
-            return Err(CodeHostError::Http(format!(
-                "HTTP {}",
-                resp.status()
-            )));
+            return Err(CodeHostError::Http(format!("HTTP {}", resp.status())));
         }
 
         let issues: Vec<GiteaIssueRaw> = resp
@@ -145,17 +145,19 @@ impl CodeHost for GiteaCodeHost {
         key: &IssueKey,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<HostComment>, CodeHostError> {
-        let mut url = format!(
+        let url = format!(
             "{}/api/v1/repos/{}/{}/issues/{}/comments",
             self.base_url, key.owner, key.repo, key.issue_number
         );
+        let mut query = vec![];
         if let Some(since_dt) = since {
-            url.push_str(&format!("?since={}", since_dt.to_rfc3339()));
+            query.push(("since", since_dt.to_rfc3339()));
         }
 
         let resp = self
             .client
             .get(&url)
+            .query(&query)
             .header("Authorization", format!("token {}", self.token))
             .send()
             .await
@@ -230,7 +232,10 @@ mod tests {
     async fn list_assigned_issues_parses_response() {
         let mut server = Server::new_async().await;
         let mock = server
-            .mock("GET", "/api/v1/issues?type=assigned&state=open&limit=50")
+            .mock(
+                "GET",
+                "/api/v1/repos/issues/search?type=issues&assigned=true&state=open",
+            )
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
@@ -248,11 +253,7 @@ mod tests {
             .create_async()
             .await;
 
-        let host = GiteaCodeHost::new(
-            server.url(),
-            "test".into(),
-            "foundry-bot".into(),
-        );
+        let host = GiteaCodeHost::new(server.url(), "test".into(), "foundry-bot".into());
         let issues = host.list_assigned_issues(None).await.unwrap();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].key.issue_number, 1);
@@ -266,17 +267,23 @@ mod tests {
             .mock("GET", "/api/v1/repos/alice/proj/issues/1/comments")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"[{
+            .with_body(
+                r#"[{
                 "id": 10,
                 "user": {"login": "alice"},
                 "body": "/approve",
                 "created_at": "2026-01-01T00:00:00Z"
-            }]"#)
+            }]"#,
+            )
             .create_async()
             .await;
 
         let host = GiteaCodeHost::new(server.url(), "test".into(), "foundry-bot".into());
-        let key = IssueKey { owner: "alice".into(), repo: "proj".into(), issue_number: 1 };
+        let key = IssueKey {
+            owner: "alice".into(),
+            repo: "proj".into(),
+            issue_number: 1,
+        };
         let comments = host.list_issue_comments(&key, None).await.unwrap();
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].body, "/approve");
