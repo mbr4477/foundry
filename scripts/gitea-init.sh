@@ -129,7 +129,7 @@ api_call() {
 
 # ── Step 1: Create Gitea admin user ───────────────────────────────────────────
 
-echo "[1/5] Creating Gitea admin user @${ADMIN_USERNAME}..."
+echo "[1/6] Creating Gitea admin user @${ADMIN_USERNAME}..."
 
 if gitea_cli admin user list --admin 2>/dev/null \
        | grep -q "^[0-9]\+[[:space:]]\+${ADMIN_USERNAME}[[:space:]]"; then
@@ -146,7 +146,7 @@ fi
 
 # ── Step 2: Create bot user ───────────────────────────────────────────────────
 
-echo "[2/5] Creating bot user @${BOT_USERNAME}..."
+echo "[2/6] Creating bot user @${BOT_USERNAME}..."
 
 if gitea_cli admin user list 2>/dev/null \
        | grep -q "^[0-9]\+[[:space:]]\+${BOT_USERNAME}[[:space:]]"; then
@@ -163,7 +163,7 @@ fi
 
 # ── Step 3: Create bot API token ──────────────────────────────────────────────
 
-echo "[3/5] Creating bot API token 'foundry'..."
+echo "[3/6] Creating bot API token 'foundry'..."
 
 BOT_TOKEN=""
 BOT_TOKEN_STATUS=""
@@ -191,7 +191,7 @@ fi
 
 # ── Step 4: Register system webhook ───────────────────────────────────────────
 
-echo "[4/5] Registering system webhook..."
+echo "[4/6] Registering system webhook..."
 
 EXISTING_HOOK_ID=$(api_call GET "/admin/hooks?type=default" \
     | jq -r --arg url "$WEBHOOK_URL" '.[] | select(.config.url==$url) | .id')
@@ -211,7 +211,27 @@ else
     echo "       Created webhook (id=${NEW_HOOK_ID})."
 fi
 
-# ── Step 5: Print summary ─────────────────────────────────────────────────────
+# ── Step 5: Populate foundry-shared volume ────────────────────────────────────
+
+echo "[5/6] Populating foundry-shared volume with mcp-config.json..."
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MCP_CONFIG_SRC="${SCRIPT_DIR}/../foundry/foundry-runner/mcp-config.json"
+
+if [[ ! -f "$MCP_CONFIG_SRC" ]]; then
+    echo "ERROR: mcp-config.json not found at ${MCP_CONFIG_SRC}" >&2
+    exit 1
+fi
+
+docker run --rm \
+    -v foundry-shared:/etc/foundry \
+    -v "$(realpath "$MCP_CONFIG_SRC"):/tmp/mcp-config.json:ro" \
+    alpine:latest \
+    cp /tmp/mcp-config.json /etc/foundry/mcp-config.json
+
+echo "       Done."
+
+# ── Step 6: Print summary ─────────────────────────────────────────────────────
 
 echo ""
 echo "=== Setup complete ==="
@@ -233,4 +253,4 @@ fi
 echo "Next steps:"
 echo "  1. Set FOUNDRY_GITEA_TOKEN in your foundryd environment."
 echo "  2. Add @${BOT_USERNAME} as a Collaborator on each repo you want Foundry to manage."
-echo "  3. Docker network and volume setup is handled by docker-compose.yml."
+echo "  3. Start foundryd — the foundry-shared volume is ready with mcp-config.json."
