@@ -8,8 +8,6 @@
 
 **Tech Stack:** Docker, Node.js (Claude Code), Rust (multi-stage build), bash
 
-**Prerequisite:** Plan 2 (`foundry-mcp-gitea`) must be complete — this image embeds that binary.
-
 ---
 
 ### Task 1: Create the Dockerfile
@@ -23,35 +21,6 @@
 ```dockerfile
 # foundry-runner/Dockerfile
 
-# ─── Stage 1: Build foundry-mcp-gitea ────────────────────────────────────────
-FROM rust:1.82-slim AS builder
-
-WORKDIR /build
-
-# Cache dependencies separately from source
-COPY Cargo.toml Cargo.lock ./
-COPY foundry-core/Cargo.toml ./foundry-core/
-COPY foundry-mcp-gitea/Cargo.toml ./foundry-mcp-gitea/
-COPY foundryd/Cargo.toml ./foundryd/
-COPY foundry-setup/Cargo.toml ./foundry-setup/
-
-# Create stub lib.rs files for all crates so Cargo can resolve deps
-RUN mkdir -p foundry-core/src foundry-mcp-gitea/src foundryd/src foundry-setup/src && \
-    echo "fn main() {}" > foundry-mcp-gitea/src/main.rs && \
-    echo "fn main() {}" > foundryd/src/main.rs && \
-    echo "fn main() {}" > foundry-setup/src/main.rs && \
-    echo "" > foundry-core/src/lib.rs
-
-RUN cargo build --release -p foundry-mcp-gitea 2>/dev/null || true
-
-# Now copy real source and build properly
-COPY foundry-core/ ./foundry-core/
-COPY foundry-mcp-gitea/ ./foundry-mcp-gitea/
-
-RUN touch foundry-core/src/lib.rs foundry-mcp-gitea/src/main.rs && \
-    cargo build --release -p foundry-mcp-gitea
-
-# ─── Stage 2: Runtime image ───────────────────────────────────────────────────
 FROM node:22-slim AS runtime
 
 # Install system dependencies
@@ -65,16 +34,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
-# Copy the MCP server binary from builder
-COPY --from=builder /build/target/release/foundry-mcp-gitea /usr/local/bin/foundry-mcp-gitea
-RUN chmod +x /usr/local/bin/foundry-mcp-gitea
+# Download the official gitea-mcp binary
+ARG GITEA_MCP_VERSION=0.3.0
+RUN curl -fsSL \
+    "https://dl.gitea.com/gitea-mcp/${GITEA_MCP_VERSION}/gitea-mcp-linux-amd64" \
+    -o /usr/local/bin/gitea-mcp \
+    && chmod +x /usr/local/bin/gitea-mcp
 
 # Create non-root user — Claude Code refuses --dangerously-skip-permissions as root
 RUN groupadd -r -g 1000 foundry && \
     useradd -r -u 1000 -g foundry -m -d /home/foundry -s /bin/bash foundry
 
 # Configure git defaults for the foundry user
-# git identity is passed via GIT_AUTHOR_* env vars at runtime
 RUN su - foundry -c 'git config --global init.defaultBranch main' && \
     su - foundry -c 'git config --global advice.detachedHead false' && \
     su - foundry -c 'git config --global core.autocrlf false'
@@ -106,9 +77,6 @@ target/
 docs/
 .DS_Store
 .env
-*.db
-*.db-shm
-*.db-wal
 ```
 
 - [ ] **Step 3: Commit**
@@ -171,6 +139,21 @@ echo "======================" >&2
 
 DIRECTIVE=$(jq -r '.directive' "$INSTRUCTION_FILE")
 
+# ── Configure git HTTP authentication ─────────────────────────────────────────
+
+# Write a GIT_ASKPASS helper so git clone/push authenticate over HTTPS
+# without embedding credentials in remote URLs.
+ASKPASS_FILE="$(mktemp /tmp/git-askpass-XXXXXX.sh)"
+cat > "$ASKPASS_FILE" << 'EOF'
+#!/bin/bash
+case "$1" in
+  Username*) echo "${GITEA_BOT_USERNAME}" ;;
+  Password*) echo "${GITEA_ACCESS_TOKEN}" ;;
+esac
+EOF
+chmod +x "$ASKPASS_FILE"
+export GIT_ASKPASS="$ASKPASS_FILE"
+
 # ── Run Claude Code ────────────────────────────────────────────────────────────
 
 exec claude \
@@ -201,15 +184,15 @@ This file is placed on the `foundry-shared` Docker volume by the operator. Inclu
 {
   "mcpServers": {
     "gitea": {
-      "command": "/usr/local/bin/foundry-mcp-gitea",
-      "args": [],
+      "command": "/usr/local/bin/gitea-mcp",
+      "args": ["-t", "stdio"],
       "env": {}
     }
   }
 }
 ```
 
-`foundry-mcp-gitea` inherits `GITEA_URL` and `GITEA_TOKEN` from the container environment — no need to specify them here.
+`gitea-mcp` inherits `GITEA_URL` and `GITEA_ACCESS_TOKEN` from the container environment — no need to specify them here.
 
 - [ ] **Step 2: Commit**
 
@@ -244,13 +227,13 @@ Expected output: `foundry`
 - [ ] **Step 3: Verify required binaries are present**
 
 ```bash
-docker run --rm --entrypoint which foundry-runner:latest foundry-mcp-gitea
+docker run --rm --entrypoint which foundry-runner:latest gitea-mcp
 ```
 
-Expected: `/usr/local/bin/foundry-mcp-gitea`
+Expected: `/usr/local/bin/gitea-mcp`
 
 ```bash
-docker run --rm --entrypoint ls foundry-runner:latest -lh /usr/local/bin/foundry-mcp-gitea
+docker run --rm --entrypoint ls foundry-runner:latest -lh /usr/local/bin/gitea-mcp
 ```
 
 Expected: binary exists and is executable.
@@ -322,8 +305,8 @@ docker run --rm \
     -v /tmp/foundry-test-vol:/foundry:rw \
     -v /tmp/foundry-shared-vol:/etc/foundry:ro \
     -e ANTHROPIC_API_KEY=sk-ant-invalid \
-    -e GITEA_URL=http://localhost:3000 \
-    -e GITEA_TOKEN=fake-token \
+    -e GITEA_HOST=http://localhost:3000 \
+    -e GITEA_ACCESS_TOKEN=fake-token \
     -e GITEA_BOT_USERNAME=foundry-bot \
     -e GIT_AUTHOR_NAME="Foundry Bot" \
     -e GIT_AUTHOR_EMAIL="foundry-bot@local" \
@@ -404,10 +387,10 @@ Expected: all tests pass.
 - [ ] **Step 3: Verify release binaries exist**
 
 ```bash
-ls -lh target/release/foundryd target/release/foundry-mcp-gitea target/release/foundry-setup
+ls -lh target/release/foundryd
 ```
 
-Expected: all three binaries are present.
+Expected: binary is present.
 
 - [ ] **Step 4: Final commit**
 

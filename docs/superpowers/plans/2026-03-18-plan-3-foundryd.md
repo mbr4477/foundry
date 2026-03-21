@@ -45,7 +45,6 @@ tower.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 hex.workspace = true
-sqlx.workspace = true
 bollard.workspace = true
 futures-util.workspace = true
 base64.workspace = true
@@ -915,33 +914,10 @@ mod tests {
         let host = GiteaCodeHost::new(server.url(), "test".into(), "foundry-bot".into());
         let issues = host.list_assigned_issues(None).await.unwrap();
         assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].title, "Fix bug");
+        assert_eq!(issues[0].key.issue_number, 1);
         mock.assert_async().await;
     }
 
-    #[tokio::test]
-    async fn branch_exists_returns_true_on_200() {
-        let mut server = Server::new_async().await;
-        server.mock("GET", "/api/v1/repos/alice/proj/branches/foundry/issue-1")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"name": "foundry/issue-1"}"#)
-            .create_async().await;
-
-        let host = GiteaCodeHost::new(server.url(), "test".into(), "foundry-bot".into());
-        assert!(host.branch_exists("alice", "proj", "foundry/issue-1").await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn branch_exists_returns_false_on_404() {
-        let mut server = Server::new_async().await;
-        server.mock("GET", "/api/v1/repos/alice/proj/branches/nonexistent")
-            .with_status(404)
-            .create_async().await;
-
-        let host = GiteaCodeHost::new(server.url(), "test".into(), "foundry-bot".into());
-        assert!(!host.branch_exists("alice", "proj", "nonexistent").await.unwrap());
-    }
 }
 ```
 
@@ -959,7 +935,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use foundry_core::{
     errors::CodeHostError,
-    traits::code_host::{CodeHost, ForgeComment, ForgeIssue, ForgeReview},
+    traits::code_host::{CodeHost, HostComment, HostIssue, HostReview},
     types::IssueKey,
 };
 use reqwest::{Client, StatusCode};
@@ -1054,7 +1030,7 @@ impl CodeHost for GiteaCodeHost {
     async fn list_assigned_issues(
         &self,
         since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<ForgeIssue>, CodeHostError> {
+    ) -> Result<Vec<HostIssue>, CodeHostError> {
         let mut url = format!(
             "{}/api/v1/issues?type=assigned&state=open&limit=50",
             self.base_url
@@ -1066,16 +1042,13 @@ impl CodeHost for GiteaCodeHost {
         let raw: Vec<GiteaIssueRaw> = self.get_json(&url).await?;
         Ok(raw.into_iter().filter_map(|r| {
             let repo_ref = r.repository?;
-            Some(ForgeIssue {
-                number: r.number,
-                title: r.title,
-                body: r.body,
-                owner: repo_ref.owner.login,
-                repo: repo_ref.name,
-                assignees: vec![],
-                state: r.state,
-                updated_at: DateTime::parse_from_rfc3339(&r.updated_at)
-                    .ok()?.with_timezone(&Utc),
+            Some(HostIssue {
+                key: IssueKey {
+                    owner: repo_ref.owner.login,
+                    repo: repo_ref.name,
+                    issue_number: r.number,
+                },
+                pr_number: None,
             })
         }).collect())
     }
@@ -1084,7 +1057,7 @@ impl CodeHost for GiteaCodeHost {
         &self,
         key: &IssueKey,
         since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<ForgeComment>, CodeHostError> {
+    ) -> Result<Vec<HostComment>, CodeHostError> {
         let mut url = self.api(&format!(
             "/repos/{}/{}/issues/{}/comments",
             key.owner, key.repo, key.issue_number
@@ -1094,7 +1067,7 @@ impl CodeHost for GiteaCodeHost {
         }
         let raw: Vec<GiteaCommentRaw> = self.get_json(&url).await?;
         Ok(raw.into_iter().filter_map(|r| {
-            Some(ForgeComment {
+            Some(HostComment {
                 id: r.id,
                 author: r.user.login,
                 body: r.body,
@@ -1109,12 +1082,12 @@ impl CodeHost for GiteaCodeHost {
         owner: &str,
         repo: &str,
         pr_number: u64,
-    ) -> Result<Vec<ForgeReview>, CodeHostError> {
+    ) -> Result<Vec<HostReview>, CodeHostError> {
         let url = self.api(&format!(
             "/repos/{}/{}/pulls/{}/reviews", owner, repo, pr_number
         ));
         let raw: Vec<GiteaReviewRaw> = self.get_json(&url).await?;
-        Ok(raw.into_iter().map(|r| ForgeReview {
+        Ok(raw.into_iter().map(|r| HostReview {
             id: r.id,
             reviewer: r.user.login,
             state: r.state,
@@ -1126,55 +1099,6 @@ impl CodeHost for GiteaCodeHost {
         }).collect())
     }
 
-    async fn get_issue(&self, key: &IssueKey) -> Result<ForgeIssue, CodeHostError> {
-        let url = self.api(&format!(
-            "/repos/{}/{}/issues/{}", key.owner, key.repo, key.issue_number
-        ));
-        let raw: GiteaIssueRaw = self.get_json(&url).await?;
-        Ok(ForgeIssue {
-            number: raw.number,
-            title: raw.title,
-            body: raw.body,
-            owner: key.owner.clone(),
-            repo: key.repo.clone(),
-            assignees: vec![],
-            state: raw.state,
-            updated_at: DateTime::parse_from_rfc3339(&raw.updated_at)
-                .map(|d| d.with_timezone(&Utc))
-                .map_err(|e| CodeHostError::UnexpectedResponse(e.to_string()))?,
-        })
-    }
-
-    async fn find_pr_by_branch(
-        &self,
-        owner: &str,
-        repo: &str,
-        branch: &str,
-    ) -> Result<Option<u64>, CodeHostError> {
-        let url = self.api(&format!(
-            "/repos/{}/{}/pulls?state=open&head={}",
-            owner, repo, branch
-        ));
-        let prs: Vec<serde_json::Value> = self.get_json(&url).await?;
-        Ok(prs.first().and_then(|p| p["number"].as_u64()))
-    }
-
-    async fn branch_exists(&self, owner: &str, repo: &str, branch: &str)
-        -> Result<bool, CodeHostError>
-    {
-        let url = self.api(&format!(
-            "/repos/{}/{}/branches/{}", owner, repo,
-            branch.replace('/', "%2F")
-        ));
-        let resp = self.http.get(&url).bearer_auth(&self.token).send().await
-            .map_err(|e| CodeHostError::Http(e.to_string()))?;
-        match resp.status() {
-            StatusCode::OK => Ok(true),
-            StatusCode::NOT_FOUND => Ok(false),
-            StatusCode::UNAUTHORIZED => Err(CodeHostError::Unauthorized),
-            s => Err(CodeHostError::UnexpectedResponse(s.to_string())),
-        }
-    }
 }
 ```
 
@@ -1581,7 +1505,7 @@ git commit -m "feat(foundryd): add WebhookSource with HMAC signature verificatio
 mod tests {
     use super::*;
     use foundry_core::{
-        traits::code_host::{CodeHost, ForgeComment, ForgeIssue, ForgeReview},
+        traits::code_host::{CodeHost, HostComment, HostIssue, HostReview},
         types::IssueKey,
         errors::CodeHostError,
     };
@@ -1590,45 +1514,28 @@ mod tests {
     use tokio::sync::mpsc;
 
     struct MockCodeHost {
-        issues: Vec<ForgeIssue>,
+        issues: Vec<HostIssue>,
     }
 
     #[async_trait]
     impl CodeHost for MockCodeHost {
         async fn list_assigned_issues(&self, _: Option<chrono::DateTime<Utc>>)
-            -> Result<Vec<ForgeIssue>, CodeHostError>
+            -> Result<Vec<HostIssue>, CodeHostError>
         {
             Ok(self.issues.clone())
         }
         async fn list_issue_comments(&self, _: &IssueKey, _: Option<chrono::DateTime<Utc>>)
-            -> Result<Vec<ForgeComment>, CodeHostError> { Ok(vec![]) }
+            -> Result<Vec<HostComment>, CodeHostError> { Ok(vec![]) }
         async fn list_pr_reviews(&self, _: &str, _: &str, _: u64)
-            -> Result<Vec<ForgeReview>, CodeHostError> { Ok(vec![]) }
-        async fn get_issue(&self, key: &IssueKey)
-            -> Result<ForgeIssue, CodeHostError>
-        {
-            self.issues.iter().find(|i| i.number == key.issue_number)
-                .cloned()
-                .ok_or_else(|| CodeHostError::NotFound(key.issue_number.to_string()))
-        }
-        async fn find_pr_by_branch(&self, _: &str, _: &str, _: &str)
-            -> Result<Option<u64>, CodeHostError> { Ok(None) }
-        async fn branch_exists(&self, _: &str, _: &str, _: &str)
-            -> Result<bool, CodeHostError> { Ok(false) }
+            -> Result<Vec<HostReview>, CodeHostError> { Ok(vec![]) }
     }
 
     #[tokio::test]
     async fn poll_emits_recovery_events_for_assigned_issues() {
         let host = Arc::new(MockCodeHost {
-            issues: vec![ForgeIssue {
-                number: 1,
-                title: "test".into(),
-                body: "body".into(),
-                owner: "alice".into(),
-                repo: "proj".into(),
-                assignees: vec!["foundry-bot".into()],
-                state: "open".into(),
-                updated_at: Utc::now(),
+            issues: vec![HostIssue {
+                key: IssueKey { owner: "alice".into(), repo: "proj".into(), issue_number: 1 },
+                pr_number: None,
             }],
         });
 
@@ -1704,14 +1611,14 @@ impl EventSource for PollingSource {
                     match self.host.list_assigned_issues(None).await {
                         Ok(issues) => {
                             for issue in issues {
-                                let dedup_key = format!("{}/{}/{}", issue.owner, issue.repo, issue.number);
+                                let dedup_key = format!("{}/{}/{}", issue.key.owner, issue.key.repo, issue.key.issue_number);
                                 if seen.insert(dedup_key) {
                                     let event = Event::PollRecovery {
                                         repo: RepoId {
-                                            owner: issue.owner,
-                                            repo: issue.repo,
+                                            owner: issue.key.owner,
+                                            repo: issue.key.repo,
                                         },
-                                        issue_number: issue.number,
+                                        issue_number: issue.key.issue_number,
                                         timestamp: chrono::Utc::now(),
                                     };
                                     if tx.send(event).await.is_err() {
@@ -2840,8 +2747,8 @@ impl Dispatcher {
 
         // Build container spec
         let mut env = HashMap::new();
-        env.insert("GITEA_URL".into(), self.config.gitea.url.clone());
-        env.insert("GITEA_TOKEN".into(), self.config.gitea.api_token.clone());
+        env.insert("GITEA_HOST".into(), self.config.gitea.url.clone());
+        env.insert("GITEA_ACCESS_TOKEN".into(), self.config.gitea.api_token.clone());
         env.insert("GITEA_BOT_USERNAME".into(), self.config.gitea.bot_username.clone());
         env.insert("GIT_AUTHOR_NAME".into(), self.config.gitea.bot_display_name.clone());
         env.insert("GIT_AUTHOR_EMAIL".into(), self.config.gitea.bot_email.clone());

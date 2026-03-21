@@ -1,5 +1,8 @@
 # foundry-mcp-gitea Implementation Plan
 
+> **⚠️ SUPERSEDED — Do not execute this plan.**
+> The custom `foundry-mcp-gitea` Rust MCP server has been replaced by the official `gitea-mcp` binary from the Gitea project. See the design spec and plan 5 (foundry-runner) for current implementation guidance.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build `foundry-mcp-gitea`, a standalone MCP server binary that runs inside each ephemeral container and exposes Gitea API operations as typed tools for Claude Code.

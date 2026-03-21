@@ -23,9 +23,7 @@
 [workspace]
 members = [
     "foundry-core",
-    "foundry-mcp-gitea",
     "foundryd",
-    "foundry-setup",
 ]
 resolver = "2"
 
@@ -60,9 +58,6 @@ clap = { version = "4", features = ["derive"] }
 toml = "0.8"
 serde-env = "0.1"
 
-# Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "migrate"] }
-
 # Web server (webhook listener)
 axum = { version = "0.7", features = ["json"] }
 tower = "0.4"
@@ -75,9 +70,6 @@ bollard = "0.17"
 futures-util = "0.3"
 base64 = "0.22"
 rand = "0.8"
-
-# MCP
-rmcp = { version = "0.1", features = ["server", "transport-io"] }
 
 # Testing
 mockito = { version = "1", features = [] }
@@ -825,19 +817,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForgeIssue {
-    pub number: u64,
-    pub title: String,
-    pub body: String,
-    pub owner: String,
-    pub repo: String,
-    pub assignees: Vec<String>,
-    pub state: String,
-    pub updated_at: DateTime<Utc>,
+pub struct HostIssue {
+    pub key: IssueKey,
+    /// Set if an open PR exists for this issue (used for startup reconstruction).
+    pub pr_number: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForgeComment {
+pub struct HostComment {
     pub id: u64,
     pub author: String,
     pub body: String,
@@ -845,30 +832,29 @@ pub struct ForgeComment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForgeReview {
+pub struct HostReview {
     pub id: u64,
     pub reviewer: String,
-    pub state: String,
-    pub body: String,
+    pub state: ReviewState,
     pub submitted_at: DateTime<Utc>,
 }
 
 /// Minimal read-only interface used by `foundryd` for polling and crash recovery.
-/// All writes (comments, PRs) go through `foundry-mcp-gitea` inside the container.
+/// All writes (comments, PRs) go through `gitea-mcp` inside the container.
 #[async_trait]
 pub trait CodeHost: Send + Sync + 'static {
     /// List open issues assigned to the bot, updated since `since`.
     async fn list_assigned_issues(
         &self,
         since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<ForgeIssue>, CodeHostError>;
+    ) -> Result<Vec<HostIssue>, CodeHostError>;
 
     /// List comments on an issue, updated since `since`.
     async fn list_issue_comments(
         &self,
         key: &IssueKey,
         since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<ForgeComment>, CodeHostError>;
+    ) -> Result<Vec<HostComment>, CodeHostError>;
 
     /// List reviews on a PR.
     async fn list_pr_reviews(
@@ -876,26 +862,7 @@ pub trait CodeHost: Send + Sync + 'static {
         owner: &str,
         repo: &str,
         pr_number: u64,
-    ) -> Result<Vec<ForgeReview>, CodeHostError>;
-
-    /// Get a single issue by number.
-    async fn get_issue(&self, key: &IssueKey) -> Result<ForgeIssue, CodeHostError>;
-
-    /// Find an open PR with the given head branch.
-    async fn find_pr_by_branch(
-        &self,
-        owner: &str,
-        repo: &str,
-        branch: &str,
-    ) -> Result<Option<u64>, CodeHostError>;
-
-    /// Check whether a branch exists in the repo.
-    async fn branch_exists(
-        &self,
-        owner: &str,
-        repo: &str,
-        branch: &str,
-    ) -> Result<bool, CodeHostError>;
+    ) -> Result<Vec<HostReview>, CodeHostError>;
 }
 ```
 
