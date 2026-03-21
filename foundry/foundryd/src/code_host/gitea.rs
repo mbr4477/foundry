@@ -18,7 +18,7 @@ pub struct GiteaCodeHost {
 impl GiteaCodeHost {
     pub fn new(base_url: String, token: String, bot_username: String) -> Self {
         Self {
-            base_url,
+            base_url: base_url.trim_end_matches('/').to_string(),
             token,
             bot_username,
             client: reqwest::Client::new(),

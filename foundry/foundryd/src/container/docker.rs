@@ -194,6 +194,15 @@ impl ContainerRuntime for DockerRuntime {
         path: &str,
         contents: &[u8],
     ) -> Result<(), ContainerError> {
+        // Validate that path is a simple filename (no slashes or shell metacharacters)
+        if path.contains('/') || path.contains('\\') || path.contains(';') || path.contains('`') || path.contains('$') {
+            return Err(ContainerError::VolumeWrite {
+                volume: volume.to_string(),
+                path: path.to_string(),
+                reason: "path must be a simple filename (no slashes or metacharacters)".to_string(),
+            });
+        }
+
         let b64 = BASE64.encode(contents);
         let cmd = format!("sh -c 'echo {} | base64 -d > /data/{}'", b64, path);
 

@@ -21,9 +21,9 @@ use tokio::sync::{Mutex, Semaphore};
 use tracing::{debug, info, warn};
 
 pub struct Dispatcher {
-    pub store: Arc<dyn SessionStore>,
-    pub runtime: Arc<dyn ContainerRuntime>,
-    pub config: Arc<Config>,
+    store: Arc<dyn SessionStore>,
+    runtime: Arc<dyn ContainerRuntime>,
+    config: Arc<Config>,
     seen_deliveries: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
     pub poll_watermark: Arc<Mutex<Option<DateTime<Utc>>>>,
     event_queue: Arc<Mutex<HashMap<IssueKey, VecDeque<Event>>>>,
@@ -424,10 +424,23 @@ impl Dispatcher {
                 }
             }
 
-            // Drain event queue (clear it)
+            // Drain event queue
             {
                 let mut queues = event_queue.lock().await;
-                queues.remove(&key_clone);
+                let pending: Vec<Event> = queues
+                    .remove(&key_clone)
+                    .map(|q| q.into_iter().collect())
+                    .unwrap_or_default();
+                if !pending.is_empty() {
+                    warn!(
+                        "Pending events for {}/{}/{} after container exit: {} event(s) — \
+                        container_running is now false, next PollRecovery will re-spawn",
+                        key_clone.owner,
+                        key_clone.repo,
+                        key_clone.issue_number,
+                        pending.len()
+                    );
+                }
             }
         });
 
