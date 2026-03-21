@@ -6,7 +6,6 @@ pub mod session_store;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::*;
 
     #[test]
     fn event_source_is_object_safe() {
