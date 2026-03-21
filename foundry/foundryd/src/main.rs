@@ -1,1 +1,5 @@
-fn main() {}
+mod config;
+
+fn main() {
+    println!("foundryd stub");
+}
