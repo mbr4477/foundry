@@ -1628,7 +1628,7 @@ impl DockerRuntime {
 
 #[async_trait]
 impl ContainerRuntime for DockerRuntime {
-    async fn run_container(&self, spec: ContainerSpec) -> Result<ContainerResult, ContainerError> {
+    async fn run_container(&self, spec: &ContainerSpec) -> Result<ContainerResult, ContainerError> {
         let mounts: Vec<Mount> = spec.mounts.iter().map(|m| {
             let (source, mount_type) = match &m.source {
                 VolumeSource::Named(name) => (Some(name.clone()), MountTypeEnum::VOLUME),
@@ -1951,7 +1951,7 @@ mod tests {
 
     #[async_trait]
     impl ContainerRuntime for MockRuntime {
-        async fn run_container(&self, spec: ContainerSpec) -> Result<ContainerResult, ContainerError> {
+        async fn run_container(&self, spec: &ContainerSpec) -> Result<ContainerResult, ContainerError> {
             self.spawned.lock().unwrap().push(spec.image.clone());
             Ok(ContainerResult { container_id: "mock-id".into(), exit_code: self.exit_code })
         }
