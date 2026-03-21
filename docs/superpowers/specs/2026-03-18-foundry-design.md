@@ -27,13 +27,15 @@ Claude Code's allow-list permission rules restrict it to exactly the tools Found
 
 Does NOT: handle events, manage containers, or make decisions.
 
+> **Note:** Plan 2 (`2026-03-18-plan-2-mcp-gitea.md`), which described building a custom Rust MCP server, is superseded by this decision. Do not execute it.
+
 ### `foundry-setup` — Initialization CLI (Rust)
 
 One-shot, idempotent CLI that initializes Gitea: creates the bot user, generates an API token, registers a system-level webhook, and creates a Docker network. Safe to re-run.
 
 ### Ephemeral Container — Claude Code Runtime
 
-Runs Claude Code with `foundry-mcp-gitea` configured as an MCP server. Launched per turn, exits when Claude finishes. All state lives in Gitea and the `foundryd` session store — the container filesystem is discarded on exit.
+Runs Claude Code with `gitea-mcp` configured as an MCP server. Launched per turn, exits when Claude finishes. All state lives in Gitea and the `foundryd` session store — the container filesystem is discarded on exit.
 
 ---
 
@@ -333,16 +335,16 @@ The repo is cloned fresh each turn inside the container's ephemeral writable fil
 
 ```
 ANTHROPIC_API_KEY
-GITEA_URL
-GITEA_TOKEN
-GITEA_BOT_USERNAME
+GITEA_HOST            # gitea-mcp's name for the Gitea instance URL
+GITEA_ACCESS_TOKEN    # gitea-mcp's name for the API token
+GITEA_BOT_USERNAME    # available to Claude via the directive for self-identification; not consumed by gitea-mcp
 GIT_AUTHOR_NAME       # e.g. "Foundry Bot"
 GIT_AUTHOR_EMAIL      # e.g. "foundry-bot@gitea.local"
 GIT_COMMITTER_NAME    # same as GIT_AUTHOR_NAME
 GIT_COMMITTER_EMAIL   # same as GIT_AUTHOR_EMAIL
 ```
 
-`GIT_AUTHOR_*` and `GIT_COMMITTER_*` are standard Git environment variables. Setting them ensures every `git commit` inside the container works without requiring a `~/.gitconfig`. The values are driven by `foundry.toml` (under `[gitea]`) and passed by the dispatcher at container launch.
+`GITEA_HOST` and `GITEA_ACCESS_TOKEN` use gitea-mcp's expected env var names. `foundryd` passes them directly — no remapping needed. `GIT_AUTHOR_*` and `GIT_COMMITTER_*` are standard Git environment variables ensuring every `git commit` works without `~/.gitconfig`. All values come from `foundry.toml` (under `[gitea]`).
 
 `ANTHROPIC_API_KEY` is passed as an environment variable and is visible via `docker inspect`. For v1 this is acceptable on a trusted local network. Future improvement: mount it as a Docker secret file and have the entrypoint read it from `/run/secrets/anthropic_api_key`.
 
@@ -388,11 +390,7 @@ The dispatcher reads this file after the container exits to update session state
   "mcpServers": {
     "gitea": {
       "command": "/usr/local/bin/gitea-mcp",
-      "args": ["-t", "stdio"],
-      "env": {
-        "GITEA_HOST": "${GITEA_URL}",
-        "GITEA_ACCESS_TOKEN": "${GITEA_TOKEN}"
-      }
+      "args": ["-t", "stdio"]
     }
   },
   "permissions": {
@@ -415,7 +413,9 @@ The dispatcher reads this file after the container exits to update session state
 }
 ```
 
-`gitea-mcp` uses `GITEA_HOST` and `GITEA_ACCESS_TOKEN` as its env var names. These are remapped from the container's `GITEA_URL` and `GITEA_TOKEN` in the `env` block above — Claude Code passes these when spawning the stdio subprocess.
+`gitea-mcp` inherits `GITEA_HOST` and `GITEA_ACCESS_TOKEN` from the container environment — no remapping needed since those are the names `foundryd` passes directly.
+
+**Permissions model note:** In Claude Code, a specific `allow` entry takes precedence over a broader `deny` glob. The effect of `deny: ["mcp__gitea__*"]` plus individual `allow` entries is an allow-list: only the listed tools are callable; everything else (including `merge_pull_request`, `delete_repository`, etc.) is blocked at the permissions layer.
 
 ### Network Isolation
 
