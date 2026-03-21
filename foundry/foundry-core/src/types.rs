@@ -33,6 +33,7 @@ pub struct IssueSession {
 }
 
 impl IssueSession {
+    /// Derives the Docker volume name for this issue. Delegates to `IssueKey::volume_name`.
     pub fn volume_name(&self, prefix: &str) -> String {
         self.key.volume_name(prefix)
     }

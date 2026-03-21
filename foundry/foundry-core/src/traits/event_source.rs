@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 #[async_trait]
 pub trait EventSource: Send + Sync + 'static {
+    /// Start producing events into `tx` until `cancel` is triggered.
     async fn run(
         &self,
         tx: mpsc::Sender<Event>,

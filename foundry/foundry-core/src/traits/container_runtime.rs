@@ -12,7 +12,9 @@ pub struct ContainerSpec {
     pub memory_limit_bytes: Option<u64>,
     pub cpu_period: Option<u64>,
     pub cpu_quota: Option<i64>,
+    /// Labels applied to the container (used for orphan detection on restart).
     pub labels: HashMap<String, String>,
+    /// Kill the container after this many seconds (0 = no limit).
     pub timeout_secs: u64,
 }
 

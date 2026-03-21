@@ -23,10 +23,13 @@ pub enum Event {
         issue_number: u64,
         comment_id: u64,
         author: String,
+        /// Body included here as an optimization; Claude may also fetch via MCP.
         body: String,
         delivery_id: String,
         timestamp: DateTime<Utc>,
     },
+    /// PR reviews may have many inline comments — Claude fetches them via MCP.
+    /// No body field here by design.
     PrReviewSubmitted {
         repo: RepoId,
         pr_number: u64,
@@ -47,6 +50,8 @@ pub enum Event {
         delivery_id: String,
         timestamp: DateTime<Utc>,
     },
+    /// Synthetic event from the polling fallback — no delivery_id.
+    /// Deduplicated by (repo, issue_number, timestamp window).
     PollRecovery {
         repo: RepoId,
         issue_number: u64,
