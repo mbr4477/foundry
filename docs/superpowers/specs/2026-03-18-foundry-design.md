@@ -114,6 +114,33 @@ pub trait CodeHost: Send + Sync + 'static {
 
 Used by `foundryd` only for polling/recovery. All writes go through the MCP server inside the container. Implementations: `GiteaCodeHost`, `GitHubCodeHost` (future).
 
+### `CodeHost` Return Types
+
+```rust
+pub struct ForgeIssue {
+    pub key: IssueKey,
+    pub pr_number: Option<u64>,  // set if an open PR exists for this issue
+}
+
+pub struct ForgeComment {
+    pub id: u64,
+    pub author: String,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+}
+
+pub struct ForgeReview {
+    pub id: u64,
+    pub reviewer: String,
+    pub state: ReviewState,
+    pub submitted_at: DateTime<Utc>,
+}
+```
+
+`ForgeIssue.pr_number` is populated from Gitea's issue API, which includes a linked PR reference. During startup reconstruction, this is how `foundryd` recovers `session.pr_number` for `InReview` sessions — no separate PR lookup is needed.
+
+`list_pr_reviews` is used during startup reconstruction only: after identifying an `InReview` session, `foundryd` calls it to check whether any unaddressed reviews exist, and if so spawns a container immediately to handle them rather than waiting for the next event.
+
 ---
 
 ## Session State
@@ -148,7 +175,7 @@ The session store is in-memory only. On every startup, `foundryd` scans Gitea fo
 
 | Gitea state | Inferred phase |
 |---|---|
-| Assigned, no `/approve` comment, no branch | Planning |
+| Assigned, no `/approve` comment | Planning |
 | `/approve` comment exists, no PR | Implementing |
 | Open PR exists | InReview |
 | PR merged or issue closed | Done |
@@ -214,6 +241,8 @@ pub enum Event {
     },
     /// Synthetic event from polling — activity that may have been missed.
     /// Has no delivery_id; deduplicated by (repo, issue_number, timestamp window).
+    /// For InReview sessions, the dispatcher uses session.pr_number (already in memory)
+    /// to spawn a container that checks for and responds to any new review activity.
     PollRecovery {
         repo: RepoId,
         issue_number: u64,
@@ -230,7 +259,7 @@ Webhooks and polling can produce duplicate events. The dispatcher deduplicates u
 - Webhook events: keyed by `delivery_id` (Gitea sets `X-Gitea-Delivery` on every webhook POST)
 - `PollRecovery` events: keyed by `(repo, issue_number, timestamp)` truncated to the polling interval
 
-The polling `since` anchor is a global high-water mark: the timestamp of the most recently processed event across all issues, held in memory. On startup, polling starts from 24 hours ago. The deduplication window handles any events re-observed after a restart.
+The polling `since` anchor is a global high-water mark: the timestamp of the most recently processed event across all issues, held in memory and updated by the dispatcher after each event is processed. On startup, polling starts from 24 hours ago. The deduplication window handles any events re-observed after a restart.
 
 ### Known Limitations (v1)
 
@@ -369,6 +398,8 @@ claude --dangerously-skip-permissions \
 ```
 
 The directive is a fully-formed prompt assembled by the dispatcher. It includes all context (issue title, repo, phase, relevant history summary) so Claude can act without any initial orientation tool calls.
+
+`pr_number` is injected so Claude knows the associated PR during review turns without having to search for it. It is `null` during `Planning` and `Implementing` phases.
 
 ### `result.json` Structure
 
