@@ -191,7 +191,7 @@ pub enum Event {
         delivery_id: String,
         timestamp: DateTime<Utc>,
     },
-    /// Note: no body field — Claude reads review content via list_pr_reviews MCP tool.
+    /// Note: no body field — Claude reads review content via list_pull_request_reviews MCP tool.
     /// IssueCommentCreated carries body as an optimization (single comment, cheap to include);
     /// PR reviews may have many inline comments so Claude always fetches them via MCP.
     PrReviewSubmitted {
@@ -250,7 +250,7 @@ The polling `since` anchor is a global high-water mark: the timestamp of the mos
 4. Dispatcher: `container_runtime.ensure_volume()` for per-issue volume
 5. Dispatcher: writes `instruction.json` to volume — directive: *"Read the issue, ask clarifying questions, propose a plan. Do not write code."*
 6. Dispatcher: `container_runtime.run_container()` — blocks until exit
-7. Container: Claude reads directive, calls `get_issue` + `list_issue_comments`, posts comment, exits
+7. Container: Claude reads directive, calls `get_issue_by_index` + `get_issue_comments_by_index`, posts comment, exits
 8. Dispatcher: removes container, sets `container_running = false`
 
 ### B) Reporter replies
