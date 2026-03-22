@@ -18,7 +18,7 @@ Requires Docker.
    ```shell
    docker compose up -d
    ```
-2. Run the setup script to create users, create webhooks, and setup volumes.
+2. Run the setup script to create users, create webhooks, and setup volumes:
    ```shell
    ./scripts/gitea-init.sh \
        --gitea-container gitea \
@@ -46,7 +46,7 @@ Requires Docker.
    ```shell
    docker run --rm -it --mount type=volume,src=foundry-home,dst=/home/foundry --entrypoint bash foundry-runner:latest
    ```
-   > The `src` volume name MUST match the `foundry_home` entry in the foundry.toml file.
+   > The `src` volume name MUST match the `home_volume` entry in the foundry.toml file.
    
    Inside the container prompt:
    ```shell
