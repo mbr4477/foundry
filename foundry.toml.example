@@ -6,6 +6,7 @@ webhook_secret = "${FOUNDRY_WEBHOOK_SECRET}"  # set env var
 
 [gitea]
 url = "http://gitea:3000"
+url_from_runner = "http://172.17.0.1:3000"
 api_token = "${FOUNDRY_GITEA_TOKEN}"          # set env var (from gitea-init.sh output)
 bot_username = "foundry-bot"
 bot_display_name = "Foundry Bot"

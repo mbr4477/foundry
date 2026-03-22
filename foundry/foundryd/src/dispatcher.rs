@@ -80,7 +80,10 @@ impl Dispatcher {
     #[allow(dead_code)]
     async fn drain_queue(&self, key: &IssueKey) -> Vec<Event> {
         let mut queues = self.event_queue.lock().await;
-        queues.remove(key).map(|q| q.into_iter().collect()).unwrap_or_default()
+        queues
+            .remove(key)
+            .map(|q| q.into_iter().collect())
+            .unwrap_or_default()
     }
 
     pub async fn handle_event(&self, event: Event) -> anyhow::Result<()> {
@@ -117,8 +120,14 @@ impl Dispatcher {
         }
 
         match event {
-            Event::IssueAssigned { repo, issue_number, .. } => {
-                let key = IssueKey { owner: repo.owner, repo: repo.repo, issue_number };
+            Event::IssueAssigned {
+                repo, issue_number, ..
+            } => {
+                let key = IssueKey {
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    issue_number,
+                };
                 let existing = self.store.get(&key).await?;
                 if existing.is_none() {
                     let session = IssueSession {
@@ -128,26 +137,49 @@ impl Dispatcher {
                         container_running: false,
                     };
                     self.store.upsert(&session).await?;
-                    info!("Created session for {}/{}/{}", key.owner, key.repo, key.issue_number);
+                    info!(
+                        "Created session for {}/{}/{}",
+                        key.owner, key.repo, key.issue_number
+                    );
                 }
                 self.spawn_turn(&key, None).await?;
             }
 
-            Event::IssueClosed { repo, issue_number, .. } => {
-                let key = IssueKey { owner: repo.owner, repo: repo.repo, issue_number };
+            Event::IssueClosed {
+                repo, issue_number, ..
+            } => {
+                let key = IssueKey {
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    issue_number,
+                };
                 if let Some(session) = self.store.get(&key).await? {
                     // Only delete if no PR (otherwise handled by PrMerged/PrClosed)
                     if session.pr_number.is_none() {
                         self.store.delete(&key).await?;
                         let vol = key.volume_name(&self.config.volumes.issue_prefix);
                         let _ = self.runtime.remove_volume(&vol).await;
-                        info!("Deleted session for closed issue {}/{}/{}", key.owner, key.repo, key.issue_number);
+                        info!(
+                            "Deleted session for closed issue {}/{}/{}",
+                            key.owner, key.repo, key.issue_number
+                        );
                     }
                 }
             }
 
-            Event::IssueCommentCreated { repo, issue_number, author, body, comment_id, .. } => {
-                let key = IssueKey { owner: repo.owner.clone(), repo: repo.repo.clone(), issue_number };
+            Event::IssueCommentCreated {
+                repo,
+                issue_number,
+                author,
+                body,
+                comment_id,
+                ..
+            } => {
+                let key = IssueKey {
+                    owner: repo.owner.clone(),
+                    repo: repo.repo.clone(),
+                    issue_number,
+                };
                 // Ignore bot comments
                 if author == self.config.gitea.bot_username {
                     debug!("Ignoring bot comment from {}", author);
@@ -166,25 +198,43 @@ impl Dispatcher {
                     let mut updated = session.clone();
                     updated.phase = IssuePhase::Implementing;
                     self.store.upsert(&updated).await?;
-                    info!("Approved issue {}/{}/{}, transitioning to Implementing", key.owner, key.repo, key.issue_number);
+                    info!(
+                        "Approved issue {}/{}/{}, transitioning to Implementing",
+                        key.owner, key.repo, key.issue_number
+                    );
                     self.spawn_turn(&key, None).await?;
                 } else if !session.container_running {
-                    self.spawn_turn(&key, Some(format!("Comment from {}: {}", author, body))).await?;
+                    self.spawn_turn(&key, Some(format!("Comment from {}: {}", author, body)))
+                        .await?;
                 } else {
-                    self.enqueue_event(&key, Event::IssueCommentCreated {
-                        repo: RepoId { owner: repo.owner, repo: repo.repo },
-                        issue_number,
-                        comment_id,
-                        author,
-                        body,
-                        delivery_id: String::new(),
-                        timestamp: Utc::now(),
-                    }).await;
+                    self.enqueue_event(
+                        &key,
+                        Event::IssueCommentCreated {
+                            repo: RepoId {
+                                owner: repo.owner,
+                                repo: repo.repo,
+                            },
+                            issue_number,
+                            comment_id,
+                            author,
+                            body,
+                            delivery_id: String::new(),
+                            timestamp: Utc::now(),
+                        },
+                    )
+                    .await;
                 }
             }
 
-            Event::PrReviewSubmitted { repo, pr_number, reviewer, state, .. } => {
-                let session = self.store
+            Event::PrReviewSubmitted {
+                repo,
+                pr_number,
+                reviewer,
+                state,
+                ..
+            } => {
+                let session = self
+                    .store
                     .get_by_pr(&repo.owner, &repo.repo, pr_number)
                     .await?;
                 if let Some(session) = session {
@@ -193,40 +243,68 @@ impl Dispatcher {
                         let summary = format!("Review by {}: {:?}", reviewer, state);
                         self.spawn_turn(&key, Some(summary)).await?;
                     } else {
-                        self.enqueue_event(&key, Event::PrReviewSubmitted {
-                            repo,
-                            pr_number,
-                            reviewer,
-                            state,
-                            delivery_id: String::new(),
-                            timestamp: Utc::now(),
-                        }).await;
+                        self.enqueue_event(
+                            &key,
+                            Event::PrReviewSubmitted {
+                                repo,
+                                pr_number,
+                                reviewer,
+                                state,
+                                delivery_id: String::new(),
+                                timestamp: Utc::now(),
+                            },
+                        )
+                        .await;
                     }
                 }
             }
 
-            Event::PrMerged { repo, pr_number, .. } => {
-                if let Some(session) = self.store.get_by_pr(&repo.owner, &repo.repo, pr_number).await? {
+            Event::PrMerged {
+                repo, pr_number, ..
+            } => {
+                if let Some(session) = self
+                    .store
+                    .get_by_pr(&repo.owner, &repo.repo, pr_number)
+                    .await?
+                {
                     let key = session.key.clone();
                     self.store.delete(&key).await?;
                     let vol = key.volume_name(&self.config.volumes.issue_prefix);
                     let _ = self.runtime.remove_volume(&vol).await;
-                    info!("PR #{} merged, deleted session for {}/{}/{}", pr_number, key.owner, key.repo, key.issue_number);
+                    info!(
+                        "PR #{} merged, deleted session for {}/{}/{}",
+                        pr_number, key.owner, key.repo, key.issue_number
+                    );
                 }
             }
 
-            Event::PrClosed { repo, pr_number, .. } => {
-                if let Some(session) = self.store.get_by_pr(&repo.owner, &repo.repo, pr_number).await? {
+            Event::PrClosed {
+                repo, pr_number, ..
+            } => {
+                if let Some(session) = self
+                    .store
+                    .get_by_pr(&repo.owner, &repo.repo, pr_number)
+                    .await?
+                {
                     let key = session.key.clone();
                     self.store.delete(&key).await?;
                     let vol = key.volume_name(&self.config.volumes.issue_prefix);
                     let _ = self.runtime.remove_volume(&vol).await;
-                    info!("PR #{} closed, deleted session for {}/{}/{}", pr_number, key.owner, key.repo, key.issue_number);
+                    info!(
+                        "PR #{} closed, deleted session for {}/{}/{}",
+                        pr_number, key.owner, key.repo, key.issue_number
+                    );
                 }
             }
 
-            Event::PollRecovery { repo, issue_number, .. } => {
-                let key = IssueKey { owner: repo.owner, repo: repo.repo, issue_number };
+            Event::PollRecovery {
+                repo, issue_number, ..
+            } => {
+                let key = IssueKey {
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    issue_number,
+                };
                 let session = self.store.get(&key).await?;
 
                 match session {
@@ -242,11 +320,16 @@ impl Dispatcher {
                         self.spawn_turn(&key, None).await?;
                     }
                     Some(s) if s.phase == IssuePhase::InReview && !s.container_running => {
-                        let summary = Some("Poll recovery: check for unaddressed review feedback".to_string());
+                        let summary = Some(
+                            "Poll recovery: check for unaddressed review feedback".to_string(),
+                        );
                         self.spawn_turn(&key, summary).await?;
                     }
                     _ => {
-                        debug!("PollRecovery ignored for {}/{}/{}: already handled", key.owner, key.repo, key.issue_number);
+                        debug!(
+                            "PollRecovery ignored for {}/{}/{}: already handled",
+                            key.owner, key.repo, key.issue_number
+                        );
                     }
                 }
             }
@@ -263,13 +346,19 @@ impl Dispatcher {
         let session = match self.store.get(key).await? {
             Some(s) => s,
             None => {
-                warn!("spawn_turn: session not found for {}/{}/{}", key.owner, key.repo, key.issue_number);
+                warn!(
+                    "spawn_turn: session not found for {}/{}/{}",
+                    key.owner, key.repo, key.issue_number
+                );
                 return Ok(());
             }
         };
 
         if session.container_running {
-            debug!("spawn_turn: container already running for {}/{}/{}", key.owner, key.repo, key.issue_number);
+            debug!(
+                "spawn_turn: container already running for {}/{}/{}",
+                key.owner, key.repo, key.issue_number
+            );
             return Ok(());
         }
 
@@ -289,7 +378,7 @@ impl Dispatcher {
             branch_name,
             pr_number: session.pr_number,
             pending_event_summary: pending_summary,
-            gitea_url: self.config.gitea.url.clone(),
+            gitea_url: self.config.gitea.url_from_runner.clone(),
             bot_username: self.config.gitea.bot_username.clone(),
         };
 
@@ -298,23 +387,51 @@ impl Dispatcher {
 
         // Ensure volume and write instruction
         let vol_name = key.volume_name(&self.config.volumes.issue_prefix);
-        self.runtime.ensure_volume(&vol_name).await
+        self.runtime
+            .ensure_volume(&vol_name)
+            .await
             .unwrap_or_else(|e| warn!("ensure_volume failed: {}", e));
-        self.runtime.write_to_volume(&vol_name, "instruction.json", &instruction_json).await
+        self.runtime
+            .write_to_volume(&vol_name, "instruction.json", &instruction_json)
+            .await
             .unwrap_or_else(|e| warn!("write_to_volume failed: {}", e));
 
         // Build container spec
         let mut env = HashMap::new();
         env.insert("GITEA_HOST".to_string(), self.config.gitea.url.clone());
-        env.insert("GITEA_ACCESS_TOKEN".to_string(), self.config.gitea.api_token.clone());
-        env.insert("GITEA_BOT_USERNAME".to_string(), self.config.gitea.bot_username.clone());
-        env.insert("GIT_AUTHOR_NAME".to_string(), self.config.gitea.bot_display_name.clone());
-        env.insert("GIT_AUTHOR_EMAIL".to_string(), self.config.gitea.bot_email.clone());
-        env.insert("GIT_COMMITTER_NAME".into(), self.config.gitea.bot_display_name.clone());
-        env.insert("GIT_COMMITTER_EMAIL".into(), self.config.gitea.bot_email.clone());
-        // ANTHROPIC_API_KEY may be passed through the environment
-        if let Ok(key_val) = std::env::var("ANTHROPIC_API_KEY") {
-            env.insert("ANTHROPIC_API_KEY".to_string(), key_val);
+        env.insert(
+            "GITEA_ACCESS_TOKEN".to_string(),
+            self.config.gitea.api_token.clone(),
+        );
+        env.insert(
+            "GITEA_BOT_USERNAME".to_string(),
+            self.config.gitea.bot_username.clone(),
+        );
+        env.insert(
+            "GIT_AUTHOR_NAME".to_string(),
+            self.config.gitea.bot_display_name.clone(),
+        );
+        env.insert(
+            "GIT_AUTHOR_EMAIL".to_string(),
+            self.config.gitea.bot_email.clone(),
+        );
+        env.insert(
+            "GIT_COMMITTER_NAME".into(),
+            self.config.gitea.bot_display_name.clone(),
+        );
+        env.insert(
+            "GIT_COMMITTER_EMAIL".into(),
+            self.config.gitea.bot_email.clone(),
+        );
+        let optional_keys = [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+        ];
+        for key in optional_keys {
+            if let Ok(val) = std::env::var(key) {
+                env.insert(key.to_string(), val);
+            }
         }
 
         let mut labels = HashMap::new();
@@ -388,7 +505,10 @@ impl Dispatcher {
 
                     // Try to read result.json for pr_number
                     let mut new_pr_number = None;
-                    if let Ok(bytes) = runtime.read_from_volume(&vol_name_clone, "result.json").await {
+                    if let Ok(bytes) = runtime
+                        .read_from_volume(&vol_name_clone, "result.json")
+                        .await
+                    {
                         if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                             new_pr_number = json.get("pr_number").and_then(|v| v.as_u64());
                         }
@@ -405,7 +525,9 @@ impl Dispatcher {
                     }
 
                     // Clean up the container
-                    let _ = runtime.remove_container(&container_result.container_id).await;
+                    let _ = runtime
+                        .remove_container(&container_result.container_id)
+                        .await;
                 }
                 Err(ContainerError::Timeout { container_id }) => {
                     warn!("Container timed out: {}", container_id);
@@ -419,7 +541,10 @@ impl Dispatcher {
                     let _ = runtime.remove_container(&container_id).await;
                 }
                 Err(e) => {
-                    warn!("Container error for {}/{}/{}: {}", key_clone.owner, key_clone.repo, key_clone.issue_number, e);
+                    warn!(
+                        "Container error for {}/{}/{}: {}",
+                        key_clone.owner, key_clone.repo, key_clone.issue_number, e
+                    );
                     post_failure_comment(&config, &key_clone, &e.to_string()).await;
 
                     if let Ok(Some(mut s)) = store.get(&key_clone).await {
@@ -494,26 +619,59 @@ mod tests {
 
     impl MockRuntime {
         fn new() -> Arc<Self> {
-            Arc::new(Self { spawn_count: Arc::new(AtomicUsize::new(0)) })
+            Arc::new(Self {
+                spawn_count: Arc::new(AtomicUsize::new(0)),
+            })
         }
     }
 
     #[async_trait]
     impl ContainerRuntime for MockRuntime {
-        async fn run_container(&self, _spec: &ContainerSpec) -> Result<ContainerResult, ContainerError> {
+        async fn run_container(
+            &self,
+            _spec: &ContainerSpec,
+        ) -> Result<ContainerResult, ContainerError> {
             self.spawn_count.fetch_add(1, Ordering::SeqCst);
-            Ok(ContainerResult { container_id: "mock-container".to_string(), exit_code: 0 })
+            Ok(ContainerResult {
+                container_id: "mock-container".to_string(),
+                exit_code: 0,
+            })
         }
 
-        async fn ensure_volume(&self, _name: &str) -> Result<(), ContainerError> { Ok(()) }
-        async fn remove_volume(&self, _name: &str) -> Result<(), ContainerError> { Ok(()) }
-        async fn remove_container(&self, _id: &str) -> Result<(), ContainerError> { Ok(()) }
-        async fn write_to_volume(&self, _vol: &str, _path: &str, _contents: &[u8]) -> Result<(), ContainerError> { Ok(()) }
-        async fn read_from_volume(&self, _vol: &str, _path: &str) -> Result<Vec<u8>, ContainerError> {
+        async fn ensure_volume(&self, _name: &str) -> Result<(), ContainerError> {
+            Ok(())
+        }
+        async fn remove_volume(&self, _name: &str) -> Result<(), ContainerError> {
+            Ok(())
+        }
+        async fn remove_container(&self, _id: &str) -> Result<(), ContainerError> {
+            Ok(())
+        }
+        async fn write_to_volume(
+            &self,
+            _vol: &str,
+            _path: &str,
+            _contents: &[u8],
+        ) -> Result<(), ContainerError> {
+            Ok(())
+        }
+        async fn read_from_volume(
+            &self,
+            _vol: &str,
+            _path: &str,
+        ) -> Result<Vec<u8>, ContainerError> {
             Ok(b"{}".to_vec())
         }
-        async fn list_running_with_label(&self, _key: &str, _val: Option<&str>) -> Result<Vec<String>, ContainerError> { Ok(vec![]) }
-        async fn kill_container(&self, _id: &str) -> Result<(), ContainerError> { Ok(()) }
+        async fn list_running_with_label(
+            &self,
+            _key: &str,
+            _val: Option<&str>,
+        ) -> Result<Vec<String>, ContainerError> {
+            Ok(vec![])
+        }
+        async fn kill_container(&self, _id: &str) -> Result<(), ContainerError> {
+            Ok(())
+        }
     }
 
     fn make_config() -> Arc<Config> {
@@ -524,6 +682,7 @@ webhook_secret = "secret"
 
 [gitea]
 url = "http://gitea.local"
+url_from_runner = "http://host.docker.internal"
 api_token = "token"
 bot_username = "foundry-bot"
 bot_display_name = "Foundry Bot"
@@ -562,7 +721,10 @@ approve = "/approve"
         let dispatcher = make_dispatcher(runtime);
 
         let event = Event::IssueAssigned {
-            repo: RepoId { owner: "alice".into(), repo: "proj".into() },
+            repo: RepoId {
+                owner: "alice".into(),
+                repo: "proj".into(),
+            },
             issue_number: 1,
             assigner: "bob".into(),
             delivery_id: "del-1".into(),
@@ -573,11 +735,19 @@ approve = "/approve"
         // Give spawn time to run
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let key = IssueKey { owner: "alice".into(), repo: "proj".into(), issue_number: 1 };
+        let key = IssueKey {
+            owner: "alice".into(),
+            repo: "proj".into(),
+            issue_number: 1,
+        };
         let session = dispatcher.store.get(&key).await.unwrap();
         assert!(session.is_some(), "Session should exist");
 
-        assert_eq!(spawn_count.load(Ordering::SeqCst), 1, "Should spawn 1 container");
+        assert_eq!(
+            spawn_count.load(Ordering::SeqCst),
+            1,
+            "Should spawn 1 container"
+        );
     }
 
     #[tokio::test]
@@ -586,39 +756,59 @@ approve = "/approve"
         let dispatcher = make_dispatcher(runtime);
 
         // First, create a Planning session via IssueAssigned
-        dispatcher.handle_event(Event::IssueAssigned {
-            repo: RepoId { owner: "alice".into(), repo: "proj".into() },
-            issue_number: 2,
-            assigner: "bob".into(),
-            delivery_id: "del-1".into(),
-            timestamp: Utc::now(),
-        }).await.unwrap();
+        dispatcher
+            .handle_event(Event::IssueAssigned {
+                repo: RepoId {
+                    owner: "alice".into(),
+                    repo: "proj".into(),
+                },
+                issue_number: 2,
+                assigner: "bob".into(),
+                delivery_id: "del-1".into(),
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
 
         // Wait for container to finish
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Reset container_running
-        let key = IssueKey { owner: "alice".into(), repo: "proj".into(), issue_number: 2 };
+        let key = IssueKey {
+            owner: "alice".into(),
+            repo: "proj".into(),
+            issue_number: 2,
+        };
         if let Ok(Some(mut s)) = dispatcher.store.get(&key).await {
             s.container_running = false;
             dispatcher.store.upsert(&s).await.unwrap();
         }
 
         // Send /approve comment
-        dispatcher.handle_event(Event::IssueCommentCreated {
-            repo: RepoId { owner: "alice".into(), repo: "proj".into() },
-            issue_number: 2,
-            comment_id: 99,
-            author: "alice".into(),
-            body: "/approve".into(),
-            delivery_id: "del-2".into(),
-            timestamp: Utc::now(),
-        }).await.unwrap();
+        dispatcher
+            .handle_event(Event::IssueCommentCreated {
+                repo: RepoId {
+                    owner: "alice".into(),
+                    repo: "proj".into(),
+                },
+                issue_number: 2,
+                comment_id: 99,
+                author: "alice".into(),
+                body: "/approve".into(),
+                delivery_id: "del-2".into(),
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let session = dispatcher.store.get(&key).await.unwrap().unwrap();
-        assert_eq!(session.phase, IssuePhase::Implementing, "Phase should be Implementing after /approve");
+        assert_eq!(
+            session.phase,
+            IssuePhase::Implementing,
+            "Phase should be Implementing after /approve"
+        );
     }
 
     #[tokio::test]
@@ -628,26 +818,38 @@ approve = "/approve"
         let dispatcher = make_dispatcher(runtime);
 
         // Create session
-        dispatcher.handle_event(Event::IssueAssigned {
-            repo: RepoId { owner: "alice".into(), repo: "proj".into() },
-            issue_number: 3,
-            assigner: "alice".into(),
-            delivery_id: "del-1".into(),
-            timestamp: Utc::now(),
-        }).await.unwrap();
+        dispatcher
+            .handle_event(Event::IssueAssigned {
+                repo: RepoId {
+                    owner: "alice".into(),
+                    repo: "proj".into(),
+                },
+                issue_number: 3,
+                assigner: "alice".into(),
+                delivery_id: "del-1".into(),
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let count_after_assign = spawn_count.load(Ordering::SeqCst);
 
         // Bot comment should be ignored
-        dispatcher.handle_event(Event::IssueCommentCreated {
-            repo: RepoId { owner: "alice".into(), repo: "proj".into() },
-            issue_number: 3,
-            comment_id: 1,
-            author: "foundry-bot".into(),
-            body: "I am working on it".into(),
-            delivery_id: "del-2".into(),
-            timestamp: Utc::now(),
-        }).await.unwrap();
+        dispatcher
+            .handle_event(Event::IssueCommentCreated {
+                repo: RepoId {
+                    owner: "alice".into(),
+                    repo: "proj".into(),
+                },
+                issue_number: 3,
+                comment_id: 1,
+                author: "foundry-bot".into(),
+                body: "I am working on it".into(),
+                delivery_id: "del-2".into(),
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         assert_eq!(
@@ -663,7 +865,11 @@ approve = "/approve"
         let dispatcher = make_dispatcher(runtime);
 
         // Set up InReview session
-        let key = IssueKey { owner: "alice".into(), repo: "proj".into(), issue_number: 5 };
+        let key = IssueKey {
+            owner: "alice".into(),
+            repo: "proj".into(),
+            issue_number: 5,
+        };
         let session = IssueSession {
             key: key.clone(),
             phase: IssuePhase::InReview,
@@ -673,12 +879,18 @@ approve = "/approve"
         dispatcher.store.upsert(&session).await.unwrap();
 
         // PrMerged event
-        dispatcher.handle_event(Event::PrMerged {
-            repo: RepoId { owner: "alice".into(), repo: "proj".into() },
-            pr_number: 42,
-            delivery_id: "del-3".into(),
-            timestamp: Utc::now(),
-        }).await.unwrap();
+        dispatcher
+            .handle_event(Event::PrMerged {
+                repo: RepoId {
+                    owner: "alice".into(),
+                    repo: "proj".into(),
+                },
+                pr_number: 42,
+                delivery_id: "del-3".into(),
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
 
         let after = dispatcher.store.get(&key).await.unwrap();
         assert!(after.is_none(), "Session should be deleted after PrMerged");
@@ -691,7 +903,10 @@ approve = "/approve"
         let dispatcher = make_dispatcher(runtime);
 
         let event = Event::IssueAssigned {
-            repo: RepoId { owner: "alice".into(), repo: "proj".into() },
+            repo: RepoId {
+                owner: "alice".into(),
+                repo: "proj".into(),
+            },
             issue_number: 10,
             assigner: "bob".into(),
             delivery_id: "same-delivery-id".into(),
@@ -704,6 +919,10 @@ approve = "/approve"
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Should only spawn once
-        assert_eq!(spawn_count.load(Ordering::SeqCst), 1, "Duplicate delivery should be deduped");
+        assert_eq!(
+            spawn_count.load(Ordering::SeqCst),
+            1,
+            "Duplicate delivery should be deduped"
+        );
     }
 }

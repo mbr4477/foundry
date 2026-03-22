@@ -37,6 +37,7 @@ pub struct ServerConfig {
 #[derive(Debug, Deserialize)]
 pub struct GiteaConfig {
     pub url: String,
+    pub url_from_runner: String,
     pub api_token: String,
     pub bot_username: String,
     pub bot_display_name: String,
@@ -151,6 +152,7 @@ webhook_secret = "mysecret"
 
 [gitea]
 url = "http://gitea.local"
+url_from_runner = "http://host.docker.internal:3000"
 api_token = "gta_abc"
 bot_username = "foundry-bot"
 bot_display_name = "Foundry Bot"
