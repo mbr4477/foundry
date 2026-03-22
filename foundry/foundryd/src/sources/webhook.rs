@@ -23,8 +23,8 @@ type HmacSha256 = Hmac<Sha256>;
 
 #[allow(dead_code)]
 pub fn compute_hmac_sha256(secret: &str, body: &[u8]) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(body);
     let result = mac.finalize().into_bytes();
     hex::encode(result)
@@ -39,8 +39,8 @@ pub fn verify_hmac_sha256(secret: &str, body: &[u8], signature: &str) -> bool {
         Err(_) => return false,
     };
     // Use HMAC's constant-time verify
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(body);
     mac.verify_slice(&sig_bytes).is_ok()
 }
@@ -76,8 +76,8 @@ struct WebhookPr {
 
 #[derive(serde::Deserialize)]
 struct WebhookReview {
-    state: String,
-    user: Option<WebhookUser>,
+    #[serde(rename = "type")]
+    type_: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -96,8 +96,8 @@ pub fn parse_webhook(
     body: &str,
     delivery_id: &str,
 ) -> Result<Option<Event>, EventSourceError> {
-    let payload: WebhookPayload = serde_json::from_str(body)
-        .map_err(|e| EventSourceError::ParseError(e.to_string()))?;
+    let payload: WebhookPayload =
+        serde_json::from_str(body).map_err(|e| EventSourceError::ParseError(e.to_string()))?;
 
     let action = payload.action.as_deref().unwrap_or("");
 
@@ -117,10 +117,7 @@ pub fn parse_webhook(
             let issue = payload.issue.ok_or_else(|| {
                 EventSourceError::ParseError("Missing issue in IssueAssigned".into())
             })?;
-            let assigner = payload
-                .sender
-                .map(|s| s.login)
-                .unwrap_or_default();
+            let assigner = payload.sender.map(|s| s.login).unwrap_or_default();
             Some(Event::IssueAssigned {
                 repo,
                 issue_number: issue.number,
@@ -178,21 +175,19 @@ pub fn parse_webhook(
                 })
             }
         }
-        ("pull_request_review", "submitted") => {
+        ("pull_request_rejected", "reviewed")
+        | ("pull_request_comment", "reviewed")
+        | ("pull_request_approved", "reviewed") => {
             let pr = payload.pull_request.ok_or_else(|| {
                 EventSourceError::ParseError("Missing pull_request in PrReviewSubmitted".into())
             })?;
             let review = payload.review.ok_or_else(|| {
                 EventSourceError::ParseError("Missing review in PrReviewSubmitted".into())
             })?;
-            let reviewer = review
-                .user
-                .map(|u| u.login)
-                .or_else(|| payload.sender.map(|s| s.login))
-                .unwrap_or_default();
-            let state = match review.state.as_str() {
-                "APPROVED" => ReviewState::Approved,
-                "REQUEST_CHANGES" => ReviewState::ChangesRequested,
+            let reviewer = payload.sender.map(|s| s.login).unwrap_or_default();
+            let state = match review.type_.as_str() {
+                "pull_request_review_approved" => ReviewState::Approved,
+                "pull_request_review_rejected" => ReviewState::ChangesRequested,
                 _ => ReviewState::Comment,
             };
             Some(Event::PrReviewSubmitted {
@@ -222,10 +217,7 @@ async fn webhook_handler(
     body: Bytes,
 ) -> StatusCode {
     // Extract headers
-    let event_type = match headers
-        .get("X-Gitea-Event")
-        .and_then(|v| v.to_str().ok())
-    {
+    let event_type = match headers.get("X-Gitea-Event").and_then(|v| v.to_str().ok()) {
         Some(e) => e.to_string(),
         None => {
             debug!("Missing X-Gitea-Event header");
@@ -277,7 +269,10 @@ pub struct WebhookSource {
 
 impl WebhookSource {
     pub fn new(listen_addr: String, secret: String) -> Self {
-        Self { listen_addr, secret }
+        Self {
+            listen_addr,
+            secret,
+        }
     }
 }
 
@@ -332,7 +327,12 @@ mod tests {
         .to_string()
     }
 
-    fn make_comment_payload(issue_number: u64, comment_id: u64, body: &str, author: &str) -> String {
+    fn make_comment_payload(
+        issue_number: u64,
+        comment_id: u64,
+        body: &str,
+        author: &str,
+    ) -> String {
         serde_json::json!({
             "action": "created",
             "issue": { "number": issue_number },
@@ -373,7 +373,9 @@ mod tests {
         let body = make_issue_payload("assigned", 42);
         let event = parse_webhook("issues", &body, "del-1").unwrap().unwrap();
         match event {
-            Event::IssueAssigned { repo, issue_number, .. } => {
+            Event::IssueAssigned {
+                repo, issue_number, ..
+            } => {
                 assert_eq!(repo.owner, "alice");
                 assert_eq!(repo.repo, "proj");
                 assert_eq!(issue_number, 42);
@@ -385,9 +387,16 @@ mod tests {
     #[test]
     fn parse_issue_comment_webhook_with_approve() {
         let body = make_comment_payload(5, 100, "/approve", "alice");
-        let event = parse_webhook("issue_comment", &body, "del-2").unwrap().unwrap();
+        let event = parse_webhook("issue_comment", &body, "del-2")
+            .unwrap()
+            .unwrap();
         match event {
-            Event::IssueCommentCreated { body, author, comment_id, .. } => {
+            Event::IssueCommentCreated {
+                body,
+                author,
+                comment_id,
+                ..
+            } => {
                 assert_eq!(body, "/approve");
                 assert_eq!(author, "alice");
                 assert_eq!(comment_id, 100);
@@ -397,6 +406,85 @@ mod tests {
     }
 
     #[test]
+    fn parse_pr_comment_webhook() {
+        let body = serde_json::json!({
+            "action": "reviewed",
+            "pull_request": { "number": 7, "merged": false},
+            "repository": {
+                "owner": { "login": "alice" },
+                "name": "proj"
+            },
+            "sender": { "login": "alice" },
+            "review": {"type": "pull_request_review_comment", "content": ""}
+        })
+        .to_string();
+        let event = parse_webhook("pull_request_comment", &body, "del-3")
+            .unwrap()
+            .unwrap();
+        match event {
+            Event::PrReviewSubmitted {
+                pr_number, state, ..
+            } => {
+                assert_eq!(pr_number, 7);
+                assert_eq!(state, ReviewState::Comment);
+            }
+            _ => panic!("Expected PrReviewSubmitted"),
+        }
+    }
+    #[test]
+    fn parse_pr_review_rejected_webhook() {
+        let body = serde_json::json!({
+            "action": "reviewed",
+            "pull_request": { "number": 7, "merged": false},
+            "repository": {
+                "owner": { "login": "alice" },
+                "name": "proj"
+            },
+            "sender": { "login": "alice" },
+            "review": {"type": "pull_request_review_rejected", "content": ""}
+        })
+        .to_string();
+        let event = parse_webhook("pull_request_rejected", &body, "del-3")
+            .unwrap()
+            .unwrap();
+        match event {
+            Event::PrReviewSubmitted {
+                pr_number, state, ..
+            } => {
+                assert_eq!(pr_number, 7);
+                assert_eq!(state, ReviewState::ChangesRequested);
+            }
+            _ => panic!("Expected PrReviewSubmitted"),
+        }
+    }
+
+    #[test]
+    fn parse_pr_review_approved_webhook() {
+        let body = serde_json::json!({
+            "action": "reviewed",
+            "pull_request": { "number": 7, "merged": false},
+            "repository": {
+                "owner": { "login": "alice" },
+                "name": "proj"
+            },
+            "sender": { "login": "alice" },
+            "review": {"type": "pull_request_review_approved", "content": ""}
+        })
+        .to_string();
+        let event = parse_webhook("pull_request_approved", &body, "del-3")
+            .unwrap()
+            .unwrap();
+        match event {
+            Event::PrReviewSubmitted {
+                pr_number, state, ..
+            } => {
+                assert_eq!(pr_number, 7);
+                assert_eq!(state, ReviewState::Approved);
+            }
+            _ => panic!("Expected PrReviewSubmitted"),
+        }
+    }
+    #[test]
     fn parse_pr_merged_webhook() {
         let body = serde_json::json!({
             "action": "closed",
@@ -405,7 +493,9 @@ mod tests {
             "sender": { "login": "alice" }
         })
         .to_string();
-        let event = parse_webhook("pull_request", &body, "del-3").unwrap().unwrap();
+        let event = parse_webhook("pull_request", &body, "del-3")
+            .unwrap()
+            .unwrap();
         match event {
             Event::PrMerged { pr_number, .. } => assert_eq!(pr_number, 7),
             _ => panic!("Expected PrMerged"),
