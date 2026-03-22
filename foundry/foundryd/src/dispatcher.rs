@@ -334,6 +334,11 @@ impl Dispatcher {
                 target: std::path::PathBuf::from("/etc/foundry"),
                 read_only: true,
             },
+            Mount {
+                source: VolumeSource::Named(self.config.volumes.home_volume.clone()),
+                target: std::path::PathBuf::from("/home/foundry"),
+                read_only: false,
+            },
         ];
 
         let memory_limit_bytes = Some(self.config.container.memory_limit_mb * 1024 * 1024);
@@ -536,6 +541,7 @@ timeout_secs = 60
 [volumes]
 issue_prefix = "foundry-issue"
 shared_volume = "foundry-shared"
+home_volume = "foundry-home"
 
 [commands]
 approve = "/approve"

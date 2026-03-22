@@ -55,7 +55,10 @@ pub struct PollingConfig {
 
 impl Default for PollingConfig {
     fn default() -> Self {
-        Self { enabled: true, interval_secs: 120 }
+        Self {
+            enabled: true,
+            interval_secs: 120,
+        }
     }
 }
 
@@ -75,6 +78,7 @@ pub struct ContainerConfig {
 pub struct VolumesConfig {
     pub issue_prefix: String,
     pub shared_volume: String,
+    pub home_volume: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,7 +97,10 @@ pub struct LoggingConfig {
 
 impl Default for LoggingConfig {
     fn default() -> Self {
-        Self { level: "info".into(), format: "json".into() }
+        Self {
+            level: "info".into(),
+            format: "json".into(),
+        }
     }
 }
 
@@ -109,19 +116,27 @@ impl Config {
     }
 
     pub fn resolve_secrets(&mut self) -> Result<()> {
-        self.server.webhook_secret =
-            SecretValue::resolve(&self.server.webhook_secret)?;
-        self.gitea.api_token =
-            SecretValue::resolve(&self.gitea.api_token)?;
+        self.server.webhook_secret = SecretValue::resolve(&self.server.webhook_secret)?;
+        self.gitea.api_token = SecretValue::resolve(&self.gitea.api_token)?;
         Ok(())
     }
 }
 
-fn default_true() -> bool { true }
-fn default_polling_interval() -> u64 { 120 }
-fn default_approve() -> String { "/approve".into() }
-fn default_log_level() -> String { "info".into() }
-fn default_log_format() -> String { "json".into() }
+fn default_true() -> bool {
+    true
+}
+fn default_polling_interval() -> u64 {
+    120
+}
+fn default_approve() -> String {
+    "/approve".into()
+}
+fn default_log_level() -> String {
+    "info".into()
+}
+fn default_log_format() -> String {
+    "json".into()
+}
 
 #[cfg(test)]
 mod tests {
@@ -153,6 +168,7 @@ timeout_secs = 300
 [volumes]
 issue_prefix = "foundry-issue"
 shared_volume = "foundry-shared"
+home_volume = "foundry-home"
 
 [commands]
 approve = "/approve"

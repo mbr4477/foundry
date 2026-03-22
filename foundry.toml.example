@@ -27,6 +27,7 @@ timeout_secs = 600
 [volumes]
 issue_prefix = "foundry-issue"
 shared_volume = "foundry-shared"
+home_volume = "foundry-home"
 
 [commands]
 approve = "/approve"
