@@ -46,13 +46,6 @@ struct GiteaIssueRaw {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct GiteaPullRequestRef {
-    merged: Option<bool>,
-    merged_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct GiteaCommentRaw {
     id: u64,
     user: GiteaUserRaw,
@@ -123,8 +116,6 @@ impl CodeHost for GiteaCodeHost {
                         repo: repo.name,
                         issue_number: issue.number,
                     },
-                    // Gitea does not auto link issues to a pr number
-                    pr_number: None,
                 })
             })
             .collect();
