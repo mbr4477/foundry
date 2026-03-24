@@ -43,8 +43,6 @@ struct GiteaRepoRefRaw {
 struct GiteaIssueRaw {
     number: u64,
     repository: Option<GiteaRepoRefRaw>,
-    // Some issues may have a pull_request field if they are a PR
-    pull_request: Option<GiteaPullRequestRef>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,7 +50,6 @@ struct GiteaIssueRaw {
 struct GiteaPullRequestRef {
     merged: Option<bool>,
     merged_at: Option<String>,
-    // The PR number is the same as the issue number for Gitea
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,14 +117,14 @@ impl CodeHost for GiteaCodeHost {
             .into_iter()
             .filter_map(|issue| {
                 let repo = issue.repository?;
-                let pr_number = issue.pull_request.as_ref().map(|_| issue.number);
                 Some(HostIssue {
                     key: IssueKey {
                         owner: repo.owner,
                         repo: repo.name,
                         issue_number: issue.number,
                     },
-                    pr_number,
+                    // Gitea does not auto link issues to a pr number
+                    pr_number: None,
                 })
             })
             .collect();

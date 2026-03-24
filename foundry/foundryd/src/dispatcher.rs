@@ -119,6 +119,8 @@ impl Dispatcher {
             self.advance_watermark(t).await;
         }
 
+        debug!("{:?}", event);
+
         match event {
             Event::IssueAssigned {
                 repo, issue_number, ..
