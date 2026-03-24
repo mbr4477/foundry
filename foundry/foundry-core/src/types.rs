@@ -20,6 +20,11 @@ impl IssueKey {
     pub fn volume_name(&self, prefix: &str) -> String {
         format!("{}__{}__{}__{}", prefix, self.owner, self.repo, self.issue_number)
     }
+
+    /// Derives the Git branch name for this issue.
+    pub fn branch_name(&self) -> String {
+        format!("foundry/issue-{}", self.issue_number)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +93,12 @@ mod tests {
         let name = key.volume_name("foundry-issue");
         assert_eq!(name, "foundry-issue__alice__my-project__1");
         assert!(!name.contains("alice-my")); // would be ambiguous with single hyphen
+    }
+
+    #[test]
+    fn branch_name_uses_issue_number() {
+        let key = IssueKey { owner: "alice".into(), repo: "proj".into(), issue_number: 42 };
+        assert_eq!(key.branch_name(), "foundry/issue-42");
     }
 
     #[test]
