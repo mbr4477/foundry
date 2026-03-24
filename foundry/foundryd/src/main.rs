@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
     {
         use foundry_core::{
             traits::code_host::CodeHost,
-            types::{IssuePhase, IssueSession},
+            types::{IssueKey, IssuePhase, IssueSession},
         };
         let code_host = code_host::gitea::GiteaCodeHost::new(
             cfg.gitea.url.clone(),
@@ -89,11 +89,43 @@ async fn main() -> anyhow::Result<()> {
         match code_host.list_assigned_issues(None).await {
             Ok(issues) => {
                 debug!("{:?}", issues);
+
+                // Group issues by (owner, repo) so we call list_open_prs once per repo
+                let mut by_repo: std::collections::HashMap<(String, String), Vec<IssueKey>> =
+                    std::collections::HashMap::new();
+                for issue in &issues {
+                    by_repo
+                        .entry((issue.key.owner.clone(), issue.key.repo.clone()))
+                        .or_default()
+                        .push(issue.key.clone());
+                }
+
+                // Fetch open PRs for each repo; build branch -> pr_number map
+                let mut pr_map: std::collections::HashMap<(String, String, String), u64> =
+                    std::collections::HashMap::new();
+                for ((owner, repo), _) in &by_repo {
+                    match code_host.list_open_prs(owner, repo).await {
+                        Ok(prs) => {
+                            for pr in prs {
+                                pr_map.insert((owner.clone(), repo.clone(), pr.head_branch), pr.number);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to list open PRs for {}/{}: {} — treating as no open PRs",
+                                owner, repo, e
+                            );
+                        }
+                    }
+                }
+
+                // Reconstruct each session
                 for issue in issues {
                     let key = issue.key.clone();
                     if store.get(&key).await.ok().flatten().is_some() {
                         continue;
                     }
+
                     let comments = code_host
                         .list_issue_comments(&key, None)
                         .await
@@ -101,12 +133,18 @@ async fn main() -> anyhow::Result<()> {
                     let has_approve = comments
                         .iter()
                         .any(|c| c.body.trim().starts_with(&cfg.commands.approve));
-                    // TODO(task-5): reconstruct pr_number via list_open_prs
-                    let (phase, pr_number): (IssuePhase, Option<u64>) = if has_approve {
+
+                    let lookup = (key.owner.clone(), key.repo.clone(), key.branch_name());
+                    let matched_pr = pr_map.get(&lookup).copied();
+
+                    let (phase, pr_number) = if let Some(pr) = matched_pr {
+                        (IssuePhase::InReview, Some(pr))
+                    } else if has_approve {
                         (IssuePhase::Implementing, None)
                     } else {
                         (IssuePhase::Planning, None)
                     };
+
                     let session = IssueSession {
                         key: key.clone(),
                         phase,
@@ -118,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
                         "Reconstructed session for {}/{}/{} as {:?}",
                         key.owner, key.repo, key.issue_number, session.phase
                     );
+
                     if phase == IssuePhase::InReview {
                         if let Some(pr) = pr_number {
                             let reviews = code_host
