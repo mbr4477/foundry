@@ -23,9 +23,15 @@ pub fn branch_name(&self) -> String {
 }
 ```
 
+Add a unit test asserting `key.branch_name() == "foundry/issue-42"` for `issue_number: 42`, alongside the existing `volume_name` test.
+
 Update `dispatcher.rs` to call `key.branch_name()` instead of the inline `format!`.
 
-### 2. `HostPr` struct
+### 2. Remove `HostIssue.pr_number`
+
+`HostIssue.pr_number` in `foundry-core/src/traits/code_host.rs` is now vestigial — `GiteaCodeHost` always returns `None` and the reconstruction logic no longer reads it. Remove the field from `HostIssue` and its construction site in `gitea.rs`.
+
+### 3. `HostPr` struct
 
 Add to `foundry-core/src/traits/code_host.rs` alongside `HostIssue`, `HostComment`, `HostReview`:
 
@@ -36,7 +42,7 @@ pub struct HostPr {
 }
 ```
 
-### 3. `CodeHost` trait method
+### 4. `CodeHost` trait method
 
 Add to the `CodeHost` trait:
 
@@ -48,9 +54,9 @@ async fn list_open_prs(
 ) -> Result<Vec<HostPr>, CodeHostError>;
 ```
 
-### 4. `GiteaCodeHost` implementation
+### 5. `GiteaCodeHost` implementation
 
-Call `GET /api/v1/repos/{owner}/{repo}/pulls?state=open`. Add internal deserialization structs:
+Call `GET /api/v1/repos/{owner}/{repo}/pulls?state=open&limit=50` with pagination: loop incrementing `page=1,2,...` (starting at `page=1`) until an empty page is returned, accumulating results. Add internal deserialization structs:
 
 ```rust
 struct GiteaPrRaw {
@@ -66,14 +72,20 @@ struct GiteaHeadRef {
 
 Map to `HostPr { number, head_branch: head.ref_ }`.
 
-Add a mockito unit test verifying the happy path: one open PR in the response, `head_branch` correctly parsed from `head.ref`.
+Add a mockito unit test verifying the happy path. The test response body must use the nested `head` object shape that matches the Gitea API:
 
-### 5. Reconstruction logic in `main.rs`
+```json
+[{"number": 7, "head": {"ref": "foundry/issue-7", "label": "user:foundry/issue-7", "sha": "abc123"}}]
+```
+
+Assert that `head_branch == "foundry/issue-7"`.
+
+### 6. Reconstruction logic in `main.rs`
 
 Replace the current `issue.pr_number` check with:
 
 1. Group all assigned issues by `(owner, repo)`.
-2. For each unique repo, call `code_host.list_open_prs(owner, repo)`.
+2. For each unique repo, call `code_host.list_open_prs(owner, repo)`. If the call fails, log a warning and treat all issues in that repo as having no matched PR — do not abort reconstruction for other repos.
 3. Build a `HashMap<String, u64>` mapping `head_branch → pr_number`.
 4. For each issue, look up `key.branch_name()` in the map:
    - Found → `phase = InReview`, `pr_number = Some(matched_pr)`
