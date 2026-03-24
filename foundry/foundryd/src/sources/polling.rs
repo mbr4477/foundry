@@ -98,7 +98,7 @@ mod tests {
     use async_trait::async_trait;
     use foundry_core::{
         errors::CodeHostError,
-        traits::code_host::{CodeHost, HostComment, HostIssue, HostReview},
+        traits::code_host::{CodeHost, HostComment, HostIssue, HostPr, HostReview},
         types::IssueKey,
     };
 
@@ -131,6 +131,14 @@ mod tests {
         ) -> Result<Vec<HostReview>, CodeHostError> {
             Ok(vec![])
         }
+
+        async fn list_open_prs(
+            &self,
+            _owner: &str,
+            _repo: &str,
+        ) -> Result<Vec<HostPr>, CodeHostError> {
+            Ok(vec![])
+        }
     }
 
     #[tokio::test]
@@ -142,7 +150,6 @@ mod tests {
                     repo: "proj".into(),
                     issue_number: 1,
                 },
-                pr_number: None,
             }],
         });
 

@@ -10,7 +10,7 @@ use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{debug, info};
 
 #[derive(Parser)]
 #[command(name = "foundryd", about = "Foundry orchestrator daemon")]
@@ -56,10 +56,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Kill orphaned containers from previous crash
     info!("Checking for orphaned containers");
-    let orphans = runtime.list_running_with_label(
-        container::docker::FOUNDRY_ISSUE_LABEL,
-        None,
-    ).await.unwrap_or_default();
+    let orphans = runtime
+        .list_running_with_label(container::docker::FOUNDRY_ISSUE_LABEL, None)
+        .await
+        .unwrap_or_default();
     for id in &orphans {
         info!("Killing orphaned container {}", id);
         let _ = runtime.kill_container(id).await;
@@ -88,35 +88,97 @@ async fn main() -> anyhow::Result<()> {
         );
         match code_host.list_assigned_issues(None).await {
             Ok(issues) => {
+                debug!("{:?}", issues);
+
+                // Group issues by (owner, repo) so we call list_open_prs once per repo
+                let mut repos: std::collections::HashSet<(String, String)> =
+                    std::collections::HashSet::new();
+                for issue in &issues {
+                    repos.insert((issue.key.owner.clone(), issue.key.repo.clone()));
+                }
+
+                // Fetch open PRs for each repo; build branch -> pr_number map
+                let mut pr_map: std::collections::HashMap<(String, String, String), u64> =
+                    std::collections::HashMap::new();
+                for (owner, repo) in &repos {
+                    match code_host.list_open_prs(owner, repo).await {
+                        Ok(prs) => {
+                            for pr in prs {
+                                pr_map.insert((owner.clone(), repo.clone(), pr.head_branch), pr.number);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to list open PRs for {}/{}: {} — treating as no open PRs",
+                                owner, repo, e
+                            );
+                        }
+                    }
+                }
+
+                // Reconstruct each session
                 for issue in issues {
                     let key = issue.key.clone();
                     if store.get(&key).await.ok().flatten().is_some() {
                         continue;
                     }
-                    let comments = code_host.list_issue_comments(&key, None).await.unwrap_or_default();
-                    let has_approve = comments.iter().any(|c| c.body.trim().starts_with(&cfg.commands.approve));
-                    let (phase, pr_number) = if let Some(pr) = issue.pr_number {
+
+                    let comments = code_host
+                        .list_issue_comments(&key, None)
+                        .await
+                        .unwrap_or_default();
+                    let has_approve = comments
+                        .iter()
+                        .any(|c| c.body.trim().starts_with(&cfg.commands.approve));
+
+                    let lookup = (key.owner.clone(), key.repo.clone(), key.branch_name());
+                    let matched_pr = pr_map.get(&lookup).copied();
+
+                    let (phase, pr_number) = if let Some(pr) = matched_pr {
                         (IssuePhase::InReview, Some(pr))
                     } else if has_approve {
                         (IssuePhase::Implementing, None)
                     } else {
                         (IssuePhase::Planning, None)
                     };
-                    let session = IssueSession { key: key.clone(), phase, pr_number, container_running: false };
+
+                    let session = IssueSession {
+                        key: key.clone(),
+                        phase,
+                        pr_number,
+                        container_running: false,
+                    };
                     store.upsert(&session).await.ok();
-                    info!("Reconstructed session for {}/{}/{} as {:?}", key.owner, key.repo, key.issue_number, session.phase);
+                    info!(
+                        "Reconstructed session for {}/{}/{} as {:?}",
+                        key.owner, key.repo, key.issue_number, session.phase
+                    );
+
                     if phase == IssuePhase::InReview {
                         if let Some(pr) = pr_number {
-                            let reviews = code_host.list_pr_reviews(&key.owner, &key.repo, pr).await.unwrap_or_default();
-                            let has_unaddressed = reviews.iter().any(|r| matches!(r.state,
-                                foundry_core::types::ReviewState::ChangesRequested | foundry_core::types::ReviewState::Comment
-                            ));
+                            let reviews = code_host
+                                .list_pr_reviews(&key.owner, &key.repo, pr)
+                                .await
+                                .unwrap_or_default();
+                            let has_unaddressed = reviews.iter().any(|r| {
+                                matches!(
+                                    r.state,
+                                    foundry_core::types::ReviewState::ChangesRequested
+                                        | foundry_core::types::ReviewState::Comment
+                                )
+                            });
                             if has_unaddressed {
-                                dispatcher.handle_event(foundry_core::events::Event::PollRecovery {
-                                    repo: foundry_core::types::RepoId { owner: key.owner.clone(), repo: key.repo.clone() },
-                                    issue_number: key.issue_number,
-                                    timestamp: chrono::Utc::now(),
-                                }).await.ok();
+                                dispatcher
+                                    .handle_event(foundry_core::events::Event::PollRecovery {
+                                        repo: foundry_core::types::RepoId {
+                                            owner: key.owner.clone(),
+                                            repo: key.repo.clone(),
+                                        },
+                                        issue_number: key.issue_number,
+                                        timestamp: chrono::Utc::now(),
+                                    })
+                                    .await
+                                    .ok();
                             }
                         }
                     }
@@ -194,14 +256,21 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Graceful shutdown
-    info!("Waiting for in-flight containers (timeout: {}s)...", cfg.container.timeout_secs);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(cfg.container.timeout_secs);
+    info!(
+        "Waiting for in-flight containers (timeout: {}s)...",
+        cfg.container.timeout_secs
+    );
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(cfg.container.timeout_secs);
     loop {
         let sessions = store.list().await.unwrap_or_default();
         let running = sessions.iter().filter(|s| s.container_running).count();
         if running == 0 || std::time::Instant::now() >= deadline {
             if running > 0 {
-                info!("Shutdown timeout reached with {} containers still running", running);
+                info!(
+                    "Shutdown timeout reached with {} containers still running",
+                    running
+                );
             } else {
                 info!("All containers finished, shutting down cleanly.");
             }

@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostIssue {
     pub key: IssueKey,
-    pub pr_number: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +23,12 @@ pub struct HostReview {
     pub reviewer: String,
     pub state: ReviewState,
     pub submitted_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostPr {
+    pub number: u64,
+    pub head_branch: String,
 }
 
 #[async_trait]
@@ -43,4 +48,9 @@ pub trait CodeHost: Send + Sync + 'static {
         repo: &str,
         pr_number: u64,
     ) -> Result<Vec<HostReview>, CodeHostError>;
+    async fn list_open_prs(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<HostPr>, CodeHostError>;
 }

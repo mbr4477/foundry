@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use foundry_core::{
     errors::CodeHostError,
-    traits::code_host::{CodeHost, HostComment, HostIssue, HostReview},
+    traits::code_host::{CodeHost, HostComment, HostIssue, HostPr, HostReview},
     types::{IssueKey, ReviewState},
 };
 use serde::Deserialize;
@@ -43,16 +43,6 @@ struct GiteaRepoRefRaw {
 struct GiteaIssueRaw {
     number: u64,
     repository: Option<GiteaRepoRefRaw>,
-    // Some issues may have a pull_request field if they are a PR
-    pull_request: Option<GiteaPullRequestRef>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct GiteaPullRequestRef {
-    merged: Option<bool>,
-    merged_at: Option<String>,
-    // The PR number is the same as the issue number for Gitea
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +61,18 @@ struct GiteaReviewRaw {
     submitted_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GiteaPrRaw {
+    number: u64,
+    head: GiteaHeadRef,
+}
+
+#[derive(Debug, Deserialize)]
+struct GiteaHeadRef {
+    #[serde(rename = "ref")]
+    ref_: String,
+}
+
 fn map_review_state(state: &str) -> ReviewState {
     match state {
         "APPROVED" => ReviewState::Approved,
@@ -81,6 +83,53 @@ fn map_review_state(state: &str) -> ReviewState {
 
 #[async_trait]
 impl CodeHost for GiteaCodeHost {
+    async fn list_open_prs(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<HostPr>, CodeHostError> {
+        let mut all = Vec::new();
+        let mut page = 1u32;
+        loop {
+            let url = format!("{}/api/v1/repos/{}/{}/pulls", self.base_url, owner, repo);
+            let resp = self
+                .client
+                .get(&url)
+                .query(&[
+                    ("state", "open"),
+                    ("limit", "50"),
+                    ("page", &page.to_string()),
+                ])
+                .header("Authorization", format!("token {}", self.token))
+                .send()
+                .await
+                .map_err(|e| CodeHostError::Http(e.to_string()))?;
+
+            if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(CodeHostError::Unauthorized);
+            }
+            if !resp.status().is_success() {
+                return Err(CodeHostError::Http(format!("HTTP {}", resp.status())));
+            }
+
+            let prs: Vec<GiteaPrRaw> = resp
+                .json()
+                .await
+                .map_err(|e| CodeHostError::UnexpectedResponse(e.to_string()))?;
+
+            if prs.is_empty() {
+                break;
+            }
+
+            all.extend(prs.into_iter().map(|p| HostPr {
+                number: p.number,
+                head_branch: p.head.ref_,
+            }));
+            page += 1;
+        }
+        Ok(all)
+    }
+
     async fn list_assigned_issues(
         &self,
         since: Option<DateTime<Utc>>,
@@ -120,14 +169,12 @@ impl CodeHost for GiteaCodeHost {
             .into_iter()
             .filter_map(|issue| {
                 let repo = issue.repository?;
-                let pr_number = issue.pull_request.as_ref().map(|_| issue.number);
                 Some(HostIssue {
                     key: IssueKey {
                         owner: repo.owner,
                         repo: repo.name,
                         issue_number: issue.number,
                     },
-                    pr_number,
                 })
             })
             .collect();
@@ -256,6 +303,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_open_prs_parses_response() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/api/v1/repos/alice/proj/pulls?state=open&limit=50&page=1")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"[{"number": 7, "head": {"ref": "foundry/issue-7", "label": "user:foundry/issue-7", "sha": "abc123"}}]"#,
+            )
+            .create_async()
+            .await;
+        // Second page — empty, terminates the loop
+        let mock2 = server
+            .mock("GET", "/api/v1/repos/alice/proj/pulls?state=open&limit=50&page=2")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("[]")
+            .create_async()
+            .await;
+
+        let host = GiteaCodeHost::new(server.url(), "test".into(), "foundry-bot".into());
+        let prs = host.list_open_prs("alice", "proj").await.unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 7);
+        assert_eq!(prs[0].head_branch, "foundry/issue-7");
+        mock.assert_async().await;
+        mock2.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn list_issue_comments_parses_response() {
         let mut server = Server::new_async().await;
         let mock = server
@@ -282,6 +359,39 @@ mod tests {
         let comments = host.list_issue_comments(&key, None).await.unwrap();
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].body, "/approve");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn list_open_prs_unauthorized() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/api/v1/repos/alice/proj/pulls?state=open&limit=50&page=1")
+            .with_status(401)
+            .create_async()
+            .await;
+
+        let host = GiteaCodeHost::new(server.url(), "test".into(), "foundry-bot".into());
+        let result = host.list_open_prs("alice", "proj").await;
+        assert!(matches!(result, Err(CodeHostError::Unauthorized)));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn list_assigned_issues_unauthorized() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock(
+                "GET",
+                "/api/v1/repos/issues/search?type=issues&assigned=true&state=open",
+            )
+            .with_status(401)
+            .create_async()
+            .await;
+
+        let host = GiteaCodeHost::new(server.url(), "test".into(), "foundry-bot".into());
+        let result = host.list_assigned_issues(None).await;
+        assert!(matches!(result, Err(CodeHostError::Unauthorized)));
         mock.assert_async().await;
     }
 }

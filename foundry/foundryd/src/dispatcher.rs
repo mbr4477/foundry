@@ -119,6 +119,8 @@ impl Dispatcher {
             self.advance_watermark(t).await;
         }
 
+        debug!("{:?}", event);
+
         match event {
             Event::IssueAssigned {
                 repo, issue_number, ..
@@ -368,7 +370,7 @@ impl Dispatcher {
         self.store.upsert(&updated).await?;
 
         // Build instruction
-        let branch_name = Some(format!("foundry/issue-{}", key.issue_number));
+        let branch_name = Some(key.branch_name());
         let ctx = DirectiveContext {
             phase: session.phase,
             owner: key.owner.clone(),
