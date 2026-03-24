@@ -105,6 +105,9 @@ impl CodeHost for GiteaCodeHost {
                 .await
                 .map_err(|e| CodeHostError::Http(e.to_string()))?;
 
+            if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(CodeHostError::Unauthorized);
+            }
             if !resp.status().is_success() {
                 return Err(CodeHostError::Http(format!("HTTP {}", resp.status())));
             }
@@ -356,6 +359,39 @@ mod tests {
         let comments = host.list_issue_comments(&key, None).await.unwrap();
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].body, "/approve");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn list_open_prs_unauthorized() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/api/v1/repos/alice/proj/pulls?state=open&limit=50&page=1")
+            .with_status(401)
+            .create_async()
+            .await;
+
+        let host = GiteaCodeHost::new(server.url(), "test".into(), "foundry-bot".into());
+        let result = host.list_open_prs("alice", "proj").await;
+        assert!(matches!(result, Err(CodeHostError::Unauthorized)));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn list_assigned_issues_unauthorized() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock(
+                "GET",
+                "/api/v1/repos/issues/search?type=issues&assigned=true&state=open",
+            )
+            .with_status(401)
+            .create_async()
+            .await;
+
+        let host = GiteaCodeHost::new(server.url(), "test".into(), "foundry-bot".into());
+        let result = host.list_assigned_issues(None).await;
+        assert!(matches!(result, Err(CodeHostError::Unauthorized)));
         mock.assert_async().await;
     }
 }
