@@ -101,9 +101,8 @@ async fn main() -> anyhow::Result<()> {
                     let has_approve = comments
                         .iter()
                         .any(|c| c.body.trim().starts_with(&cfg.commands.approve));
-                    let (phase, pr_number) = if let Some(pr) = issue.pr_number {
-                        (IssuePhase::InReview, Some(pr))
-                    } else if has_approve {
+                    // TODO(task-5): reconstruct pr_number via list_open_prs
+                    let (phase, pr_number): (IssuePhase, Option<u64>) = if has_approve {
                         (IssuePhase::Implementing, None)
                     } else {
                         (IssuePhase::Planning, None)
