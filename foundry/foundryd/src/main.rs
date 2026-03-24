@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
     {
         use foundry_core::{
             traits::code_host::CodeHost,
-            types::{IssueKey, IssuePhase, IssueSession},
+            types::{IssuePhase, IssueSession},
         };
         let code_host = code_host::gitea::GiteaCodeHost::new(
             cfg.gitea.url.clone(),
@@ -91,19 +91,16 @@ async fn main() -> anyhow::Result<()> {
                 debug!("{:?}", issues);
 
                 // Group issues by (owner, repo) so we call list_open_prs once per repo
-                let mut by_repo: std::collections::HashMap<(String, String), Vec<IssueKey>> =
-                    std::collections::HashMap::new();
+                let mut repos: std::collections::HashSet<(String, String)> =
+                    std::collections::HashSet::new();
                 for issue in &issues {
-                    by_repo
-                        .entry((issue.key.owner.clone(), issue.key.repo.clone()))
-                        .or_default()
-                        .push(issue.key.clone());
+                    repos.insert((issue.key.owner.clone(), issue.key.repo.clone()));
                 }
 
                 // Fetch open PRs for each repo; build branch -> pr_number map
                 let mut pr_map: std::collections::HashMap<(String, String, String), u64> =
                     std::collections::HashMap::new();
-                for ((owner, repo), _) in &by_repo {
+                for (owner, repo) in &repos {
                     match code_host.list_open_prs(owner, repo).await {
                         Ok(prs) => {
                             for pr in prs {
