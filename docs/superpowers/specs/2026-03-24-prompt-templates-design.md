@@ -177,26 +177,33 @@ dispatcher::spawn_turn
 **`dispatcher.rs` integration test:**
 - Construct a config with a `[prompts.planning]` override. `MockRuntime::write_to_volume` currently discards bytes — extend it to capture written bytes (e.g. store in an `Arc<Mutex<HashMap<String, Vec<u8>>>>`) before writing this test. Trigger `spawn_turn` for a Planning-phase session via `handle_event`. Assert by deserializing the captured bytes as `Instruction` and checking that `instruction.directive` equals or contains the expected overridden text (do not use raw byte substring matching, as JSON escaping may produce unexpected results).
 
-**`foundry.toml` (repo root):**
-- Add a commented-out `[prompts]` example block at the bottom of `/Users/matthew/claudejr/foundry.toml` demonstrating all three phases and all available variables:
+**`foundry.toml.example` (repo root):**
+- Add a commented-out `[prompts]` example block to `/Users/matthew/claudejr/foundry.toml.example`. The `prompt` values must exactly match the current hardcoded defaults from `directive.rs` (with `{{variable}}` placeholders substituted for the format arguments):
 
 ```toml
 # [prompts.planning]
+# # Uncomment and edit to override the default planning prompt.
+# # prompt replaces the entire directive; prompt_append appends to it (separated by \n\n).
 # prompt = """
-# You are a software developer assistant working on {{owner}}/{{repo}}.
-# Your task:
-# 1. Read issue #{{issue_number}}: "{{issue_title}}"
-# 2. Analyze the issue and post a comment with clarifying questions or an implementation plan
-# 3. Do NOT write any code yet
+# You are a software developer assistant. Your task:
+# 1. Read issue #{{issue_number}} in repository {{owner}}/{{repo}}: "{{issue_title}}"
+# 2. Analyze the issue carefully
+# 3. Post a comment on the issue asking clarifying questions or proposing an implementation plan
+# 4. Do NOT write any code yet — only communicate via comments
+# 5. Wait for human feedback before proceeding\
 # """
-# prompt_append = "Always respond in the same language as the issue."
+# prompt_append = ""
 #
 # [prompts.implementing]
 # prompt = """
 # You are a software developer assistant. Your task:
-# 1. Clone {{owner}}/{{repo}} and create branch {{branch_name}}
-# 2. Implement the solution for issue #{{issue_number}}: "{{issue_title}}"
-# 3. Push the branch, open a pull request, and write /foundry/result.json
+# 1. Clone the repository {{owner}}/{{repo}}
+# 2. Create branch `{{branch_name}}` from the default branch
+# 3. Implement the solution for issue #{{issue_number}}: "{{issue_title}}"
+# 4. Push the branch to the remote
+# 5. Open a pull request referencing issue #{{issue_number}}
+# 6. Write a result.json file to /foundry/result.json with the format: {"pr_number": N}
+# 7. Exit when complete\
 # """
 # prompt_append = ""
 #
@@ -204,8 +211,10 @@ dispatcher::spawn_turn
 # prompt = """
 # You are a software developer assistant. Your task:
 # 1. Check out the branch for PR #{{pr_number}} in {{owner}}/{{repo}}
-# 2. Address all review feedback: {{pending_event_summary}}
-# 3. Push your changes — do NOT force-push
+# 2. Read the review comments and feedback
+# 3. Address all review feedback by updating the code
+# 4. Push your changes to the existing branch — do NOT force-push
+# 5. Summary of pending events: {{pending_event_summary}}\
 # """
 # prompt_append = ""
 ```
