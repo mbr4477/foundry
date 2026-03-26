@@ -285,23 +285,49 @@ Expected: compile error — `render_template` not defined.
 
 - [ ] **Step 3: Implement `render_template`**
 
-Add this function to `foundry/foundryd/src/directive.rs` (after `build_directive`, before `build_instruction`):
+Add this function to `foundry/foundryd/src/directive.rs` (after `build_directive`, before `build_instruction`).
+
+Use a single-pass scanner (NOT chained `.replace()`) — chained replace fails the non-reprocessing contract when a context value itself contains `{{...}}` syntax:
 
 ```rust
 pub fn render_template(template: &str, ctx: &DirectiveContext) -> String {
-    template
-        .replace("{{owner}}", &ctx.owner)
-        .replace("{{repo}}", &ctx.repo)
-        .replace("{{issue_number}}", &ctx.issue_number.to_string())
-        .replace("{{issue_title}}", &ctx.issue_title)
-        .replace("{{gitea_url}}", &ctx.gitea_url)
-        .replace("{{bot_username}}", &ctx.bot_username)
-        .replace("{{branch_name}}", ctx.branch_name.as_deref().unwrap_or(""))
-        .replace("{{pr_number}}", &ctx.pr_number.map(|n| n.to_string()).unwrap_or_default())
-        .replace(
-            "{{pending_event_summary}}",
-            ctx.pending_event_summary.as_deref().unwrap_or(""),
-        )
+    let pr_number_str = ctx.pr_number.map(|n| n.to_string()).unwrap_or_default();
+    let issue_number_str = ctx.issue_number.to_string();
+    let vars: &[(&str, &str)] = &[
+        ("owner", &ctx.owner),
+        ("repo", &ctx.repo),
+        ("issue_number", &issue_number_str),
+        ("issue_title", &ctx.issue_title),
+        ("gitea_url", &ctx.gitea_url),
+        ("bot_username", &ctx.bot_username),
+        ("branch_name", ctx.branch_name.as_deref().unwrap_or("")),
+        ("pr_number", &pr_number_str),
+        ("pending_event_summary", ctx.pending_event_summary.as_deref().unwrap_or("")),
+    ];
+
+    let mut result = String::with_capacity(template.len());
+    let mut remaining = template;
+    while let Some(open) = remaining.find("{{") {
+        result.push_str(&remaining[..open]);
+        let after_open = &remaining[open + 2..];
+        if let Some(close) = after_open.find("}}") {
+            let key = &after_open[..close];
+            if let Some(&(_, value)) = vars.iter().find(|&&(k, _)| k == key) {
+                result.push_str(value);
+            } else {
+                result.push_str("{{");
+                result.push_str(key);
+                result.push_str("}}");
+            }
+            remaining = &after_open[close + 2..];
+        } else {
+            // No closing }}, emit the rest as-is
+            result.push_str("{{");
+            remaining = after_open;
+        }
+    }
+    result.push_str(remaining);
+    result
 }
 ```
 
