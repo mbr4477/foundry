@@ -12,9 +12,7 @@ pub struct DirectiveContext {
     pub branch_name: Option<String>,
     pub pr_number: Option<u64>,
     pub pending_event_summary: Option<String>,
-    #[allow(dead_code)]
     pub gitea_url: String,
-    #[allow(dead_code)]
     pub bot_username: String,
 }
 
