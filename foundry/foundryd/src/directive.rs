@@ -1,3 +1,4 @@
+use crate::config::PhasePromptConfig;
 use foundry_core::types::IssuePhase;
 use serde::{Deserialize, Serialize};
 
@@ -130,6 +131,24 @@ pub fn render_template(template: &str, ctx: &DirectiveContext) -> String {
     result
 }
 
+pub fn apply_phase_prompt(
+    base: String,
+    phase_cfg: Option<&PhasePromptConfig>,
+    ctx: &DirectiveContext,
+) -> String {
+    let Some(cfg) = phase_cfg else {
+        return base;
+    };
+    let base = match cfg.prompt.as_deref().filter(|s| !s.is_empty()) {
+        Some(template) => render_template(template, ctx),
+        None => base,
+    };
+    match cfg.prompt_append.as_deref().filter(|s| !s.is_empty()) {
+        Some(template) => format!("{}\n\n{}", base, render_template(template, ctx)),
+        None => base,
+    }
+}
+
 pub fn build_instruction(ctx: &DirectiveContext) -> Instruction {
     Instruction {
         phase: ctx.phase.to_string(),
@@ -146,6 +165,70 @@ pub fn build_instruction(ctx: &DirectiveContext) -> Instruction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::PhasePromptConfig;
+
+    #[test]
+    fn apply_phase_prompt_returns_base_when_no_config() {
+        let ctx = planning_ctx();
+        let result = apply_phase_prompt("default".to_string(), None, &ctx);
+        assert_eq!(result, "default");
+    }
+
+    #[test]
+    fn apply_phase_prompt_replaces_base_when_prompt_set() {
+        let cfg = PhasePromptConfig {
+            prompt: Some("custom {{owner}}".to_string()),
+            prompt_append: None,
+        };
+        let ctx = planning_ctx();
+        let result = apply_phase_prompt("default".to_string(), Some(&cfg), &ctx);
+        assert_eq!(result, "custom alice");
+    }
+
+    #[test]
+    fn apply_phase_prompt_appends_when_only_append_set() {
+        let cfg = PhasePromptConfig {
+            prompt: None,
+            prompt_append: Some("extra {{repo}}".to_string()),
+        };
+        let ctx = planning_ctx();
+        let result = apply_phase_prompt("default".to_string(), Some(&cfg), &ctx);
+        assert_eq!(result, "default\n\nextra myproject");
+    }
+
+    #[test]
+    fn apply_phase_prompt_replaces_and_appends_when_both_set() {
+        let cfg = PhasePromptConfig {
+            prompt: Some("custom".to_string()),
+            prompt_append: Some("appended".to_string()),
+        };
+        let ctx = planning_ctx();
+        let result = apply_phase_prompt("default".to_string(), Some(&cfg), &ctx);
+        assert_eq!(result, "custom\n\nappended");
+    }
+
+    #[test]
+    fn apply_phase_prompt_empty_string_prompt_falls_back_to_default() {
+        let cfg = PhasePromptConfig {
+            prompt: Some("".to_string()),
+            prompt_append: Some("extra".to_string()),
+        };
+        let ctx = planning_ctx();
+        let result = apply_phase_prompt("default".to_string(), Some(&cfg), &ctx);
+        // empty prompt → use default base; then append
+        assert_eq!(result, "default\n\nextra");
+    }
+
+    #[test]
+    fn apply_phase_prompt_empty_append_is_ignored() {
+        let cfg = PhasePromptConfig {
+            prompt: None,
+            prompt_append: Some("".to_string()),
+        };
+        let ctx = planning_ctx();
+        let result = apply_phase_prompt("default".to_string(), Some(&cfg), &ctx);
+        assert_eq!(result, "default");
+    }
 
     fn planning_ctx() -> DirectiveContext {
         DirectiveContext {
