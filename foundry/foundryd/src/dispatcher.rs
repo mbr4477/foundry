@@ -618,17 +618,20 @@ mod tests {
         traits::container_runtime::{ContainerResult, ContainerRuntime, ContainerSpec},
         types::IssueKey,
     };
+    use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Mock container runtime
     struct MockRuntime {
         spawn_count: Arc<AtomicUsize>,
+        written_volumes: Arc<Mutex<HashMap<(String, String), Vec<u8>>>>,
     }
 
     impl MockRuntime {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 spawn_count: Arc::new(AtomicUsize::new(0)),
+                written_volumes: Arc::new(Mutex::new(HashMap::new())),
             })
         }
     }
@@ -657,10 +660,12 @@ mod tests {
         }
         async fn write_to_volume(
             &self,
-            _vol: &str,
-            _path: &str,
-            _contents: &[u8],
+            vol: &str,
+            path: &str,
+            contents: &[u8],
         ) -> Result<(), ContainerError> {
+            let mut map = self.written_volumes.lock().await;
+            map.insert((vol.to_string(), path.to_string()), contents.to_vec());
             Ok(())
         }
         async fn read_from_volume(
@@ -931,6 +936,73 @@ approve = "/approve"
             spawn_count.load(Ordering::SeqCst),
             1,
             "Duplicate delivery should be deduped"
+        );
+    }
+
+    #[tokio::test]
+    async fn planning_prompt_override_is_applied_to_instruction() {
+        let toml = r#"
+[server]
+listen_addr = "0.0.0.0:8477"
+webhook_secret = "secret"
+[gitea]
+url = "http://gitea.local"
+url_from_runner = "http://host.docker.internal"
+api_token = "token"
+bot_username = "foundry-bot"
+bot_display_name = "Foundry Bot"
+bot_email = "bot@local"
+[container]
+image = "foundry-runner:latest"
+runtime = "docker"
+network = "foundry-net"
+memory_limit_mb = 512
+cpu_limit = 0.5
+max_concurrent = 4
+timeout_secs = 60
+[volumes]
+issue_prefix = "foundry-issue"
+shared_volume = "foundry-shared"
+home_volume = "foundry-home"
+[commands]
+approve = "/approve"
+[prompts.planning]
+prompt = "CUSTOM PLANNING for {{owner}}/{{repo}} issue #{{issue_number}}"
+"#;
+        let config = Arc::new(Config::from_toml(toml).unwrap());
+        let store: Arc<dyn SessionStore> = Arc::new(MemorySessionStore::new());
+        let runtime = MockRuntime::new();
+        let written = runtime.written_volumes.clone();
+        let dispatcher = Dispatcher::new(store, runtime, config);
+
+        dispatcher
+            .handle_event(Event::IssueAssigned {
+                repo: RepoId {
+                    owner: "alice".into(),
+                    repo: "proj".into(),
+                },
+                issue_number: 99,
+                assigner: "bob".into(),
+                delivery_id: "del-override".into(),
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let map = written.lock().await;
+        let vol_key = (
+            "foundry-issue__alice__proj__99".to_string(),
+            "instruction.json".to_string(),
+        );
+        let bytes = map.get(&vol_key).expect("instruction.json should have been written");
+        let instruction: crate::directive::Instruction =
+            serde_json::from_slice(bytes).expect("instruction.json should deserialize");
+        assert!(
+            instruction.directive.contains("CUSTOM PLANNING for alice/proj issue #99"),
+            "directive should contain custom prompt, got: {}",
+            instruction.directive
         );
     }
 }
