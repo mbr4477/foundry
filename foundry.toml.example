@@ -40,7 +40,7 @@ format = "json"
 # Optional: override the default prompts for each workflow stage.
 # Use {{variable}} placeholders — see docs/superpowers/specs/2026-03-24-prompt-templates-design.md
 # for the full variable reference.
-# prompt replaces the entire directive; prompt_append appends to it (joined by \n\n).
+# prompt replaces the entire directive; prompt_append appends to it (separated by \n\n).
 # Omit either key to use the default behaviour.
 
 # [prompts.planning]
@@ -74,6 +74,8 @@ format = "json"
 # [prompts.in_review]
 # # Uncomment and edit to override the default in-review prompt.
 # # prompt replaces the entire directive; prompt_append appends to it (separated by \n\n).
+# # Note: {{pending_event_summary}} renders as empty string when no summary is available.
+# # The built-in default uses "New review feedback is available" as a fallback instead.
 # prompt = """
 # You are a software developer assistant. Your task:
 # 1. Check out the branch for PR #{{pr_number}} in {{owner}}/{{repo}}
