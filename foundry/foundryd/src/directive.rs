@@ -90,6 +90,46 @@ pub fn build_directive(ctx: &DirectiveContext) -> String {
     }
 }
 
+pub fn render_template(template: &str, ctx: &DirectiveContext) -> String {
+    let pr_number_str = ctx.pr_number.map(|n| n.to_string()).unwrap_or_default();
+    let issue_number_str = ctx.issue_number.to_string();
+    let vars: &[(&str, &str)] = &[
+        ("owner", &ctx.owner),
+        ("repo", &ctx.repo),
+        ("issue_number", &issue_number_str),
+        ("issue_title", &ctx.issue_title),
+        ("gitea_url", &ctx.gitea_url),
+        ("bot_username", &ctx.bot_username),
+        ("branch_name", ctx.branch_name.as_deref().unwrap_or("")),
+        ("pr_number", &pr_number_str),
+        ("pending_event_summary", ctx.pending_event_summary.as_deref().unwrap_or("")),
+    ];
+
+    let mut result = String::with_capacity(template.len());
+    let mut remaining = template;
+    while let Some(open) = remaining.find("{{") {
+        result.push_str(&remaining[..open]);
+        let after_open = &remaining[open + 2..];
+        if let Some(close) = after_open.find("}}") {
+            let key = &after_open[..close];
+            if let Some(&(_, value)) = vars.iter().find(|&&(k, _)| k == key) {
+                result.push_str(value);
+            } else {
+                result.push_str("{{");
+                result.push_str(key);
+                result.push_str("}}");
+            }
+            remaining = &after_open[close + 2..];
+        } else {
+            // No closing }}, emit the rest as-is
+            result.push_str("{{");
+            remaining = after_open;
+        }
+    }
+    result.push_str(remaining);
+    result
+}
+
 pub fn build_instruction(ctx: &DirectiveContext) -> Instruction {
     Instruction {
         phase: ctx.phase.to_string(),
@@ -193,5 +233,76 @@ mod tests {
         ctx.phase = IssuePhase::Done;
         let directive = build_directive(&ctx);
         assert!(directive.contains("Exit"), "Done phase should say to exit");
+    }
+
+    #[test]
+    fn render_template_substitutes_all_variables() {
+        let ctx = DirectiveContext {
+            phase: IssuePhase::InReview,
+            owner: "alice".into(),
+            repo: "myproject".into(),
+            issue_number: 42,
+            issue_title: "Fix the bug".into(),
+            branch_name: Some("foundry/issue-42".into()),
+            pr_number: Some(11),
+            pending_event_summary: Some("review by bob".into()),
+            gitea_url: "http://gitea.local".into(),
+            bot_username: "foundry-bot".into(),
+        };
+        let template = "{{owner}}/{{repo}} #{{issue_number}} \"{{issue_title}}\" \
+                        branch={{branch_name}} pr={{pr_number}} \
+                        summary={{pending_event_summary}} \
+                        url={{gitea_url}} bot={{bot_username}}";
+        let result = render_template(template, &ctx);
+        assert_eq!(
+            result,
+            "alice/myproject #42 \"Fix the bug\" branch=foundry/issue-42 \
+             pr=11 summary=review by bob url=http://gitea.local bot=foundry-bot"
+        );
+    }
+
+    #[test]
+    fn render_template_unknown_placeholder_passes_through() {
+        let ctx = planning_ctx();
+        let result = render_template("hello {{unknown_var}} world", &ctx);
+        assert_eq!(result, "hello {{unknown_var}} world");
+    }
+
+    #[test]
+    fn render_template_option_none_renders_empty_string() {
+        let ctx = DirectiveContext {
+            phase: IssuePhase::Planning,
+            owner: "alice".into(),
+            repo: "repo".into(),
+            issue_number: 1,
+            issue_title: "title".into(),
+            branch_name: None,
+            pr_number: None,
+            pending_event_summary: None,
+            gitea_url: "http://g".into(),
+            bot_username: "bot".into(),
+        };
+        let result = render_template("b={{branch_name}} p={{pr_number}} s={{pending_event_summary}}", &ctx);
+        assert_eq!(result, "b= p= s=");
+    }
+
+    #[test]
+    fn render_template_does_not_reprocess_substituted_values() {
+        // A substituted value containing {{...}} should not be further processed
+        let ctx = DirectiveContext {
+            phase: IssuePhase::Planning,
+            owner: "{{repo}}".into(), // owner value looks like a placeholder
+            repo: "myrepo".into(),
+            issue_number: 1,
+            issue_title: "t".into(),
+            branch_name: None,
+            pr_number: None,
+            pending_event_summary: None,
+            gitea_url: "http://g".into(),
+            bot_username: "bot".into(),
+        };
+        let result = render_template("{{owner}}/{{repo}}", &ctx);
+        // owner renders as "{{repo}}", but that is NOT re-substituted
+        assert_eq!(result, "{{repo}}/myrepo");
     }
 }
