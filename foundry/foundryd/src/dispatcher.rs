@@ -384,7 +384,13 @@ impl Dispatcher {
             bot_username: self.config.gitea.bot_username.clone(),
         };
 
-        let instruction = build_instruction(&ctx);
+        let phase_cfg = match session.phase {
+            IssuePhase::Planning     => self.config.prompts.planning.as_ref(),
+            IssuePhase::Implementing => self.config.prompts.implementing.as_ref(),
+            IssuePhase::InReview     => self.config.prompts.in_review.as_ref(),
+            IssuePhase::Done         => None,
+        };
+        let instruction = build_instruction(&ctx, phase_cfg);
         let instruction_json = serde_json::to_vec(&instruction)?;
 
         // Ensure volume and write instruction

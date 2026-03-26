@@ -149,7 +149,7 @@ pub fn apply_phase_prompt(
     }
 }
 
-pub fn build_instruction(ctx: &DirectiveContext) -> Instruction {
+pub fn build_instruction(ctx: &DirectiveContext, phase_cfg: Option<&PhasePromptConfig>) -> Instruction {
     Instruction {
         phase: ctx.phase.to_string(),
         repo: InstructionRepo {
@@ -158,7 +158,7 @@ pub fn build_instruction(ctx: &DirectiveContext) -> Instruction {
         },
         issue_number: ctx.issue_number,
         pr_number: ctx.pr_number,
-        directive: build_directive(ctx),
+        directive: apply_phase_prompt(build_directive(ctx), phase_cfg, ctx),
     }
 }
 
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn instruction_serializes_with_correct_phase_string() {
         let ctx = planning_ctx();
-        let instruction = build_instruction(&ctx);
+        let instruction = build_instruction(&ctx, None);
         assert_eq!(instruction.phase, "planning");
         let json = serde_json::to_string(&instruction).unwrap();
         assert!(json.contains("\"phase\":\"planning\""));
