@@ -131,6 +131,7 @@ impl Dispatcher {
                     issue_number,
                 };
                 let existing = self.store.get(&key).await?;
+                debug!("IssueAssigned: {:?}", existing);
                 if existing.is_none() {
                     let session = IssueSession {
                         key: key.clone(),
@@ -155,7 +156,9 @@ impl Dispatcher {
                     repo: repo.repo,
                     issue_number,
                 };
-                if let Some(session) = self.store.get(&key).await? {
+                let session = self.store.get(&key).await?;
+                debug!("IssueClosed: {:?}", session);
+                if let Some(session) = session {
                     // Only delete if no PR (otherwise handled by PrMerged/PrClosed)
                     if session.pr_number.is_none() {
                         self.store.delete(&key).await?;
@@ -192,6 +195,7 @@ impl Dispatcher {
                     Some(s) => s,
                     None => return Ok(()),
                 };
+                debug!("IssueCommentCreated: {:?}", session);
 
                 let is_approve = body.trim().starts_with(&self.config.commands.approve);
 
@@ -239,6 +243,7 @@ impl Dispatcher {
                     .store
                     .get_by_pr(&repo.owner, &repo.repo, pr_number)
                     .await?;
+                debug!("PrReviewSubmitted: {:?}", session);
                 if let Some(session) = session {
                     let key = session.key.clone();
                     if !session.container_running {
@@ -264,11 +269,12 @@ impl Dispatcher {
             Event::PrMerged {
                 repo, pr_number, ..
             } => {
-                if let Some(session) = self
+                let session = self
                     .store
                     .get_by_pr(&repo.owner, &repo.repo, pr_number)
-                    .await?
-                {
+                    .await?;
+                debug!("PrMerged: {:?}", session);
+                if let Some(session) = session {
                     let key = session.key.clone();
                     self.store.delete(&key).await?;
                     let vol = key.volume_name(&self.config.volumes.issue_prefix);
@@ -283,11 +289,12 @@ impl Dispatcher {
             Event::PrClosed {
                 repo, pr_number, ..
             } => {
-                if let Some(session) = self
+                let session = self
                     .store
                     .get_by_pr(&repo.owner, &repo.repo, pr_number)
-                    .await?
-                {
+                    .await?;
+                debug!("PrMerged: {:?}", session);
+                if let Some(session) = session {
                     let key = session.key.clone();
                     self.store.delete(&key).await?;
                     let vol = key.volume_name(&self.config.volumes.issue_prefix);
@@ -385,10 +392,10 @@ impl Dispatcher {
         };
 
         let phase_cfg = match session.phase {
-            IssuePhase::Planning     => self.config.prompts.planning.as_ref(),
+            IssuePhase::Planning => self.config.prompts.planning.as_ref(),
             IssuePhase::Implementing => self.config.prompts.implementing.as_ref(),
-            IssuePhase::InReview     => self.config.prompts.in_review.as_ref(),
-            IssuePhase::Done         => None,
+            IssuePhase::InReview => self.config.prompts.in_review.as_ref(),
+            IssuePhase::Done => None,
         };
         let instruction = build_instruction(&ctx, phase_cfg);
         let instruction_json = serde_json::to_vec(&instruction)?;
@@ -996,11 +1003,15 @@ prompt = "CUSTOM PLANNING for {{owner}}/{{repo}} issue #{{issue_number}}"
             "foundry-issue__alice__proj__99".to_string(),
             "instruction.json".to_string(),
         );
-        let bytes = map.get(&vol_key).expect("instruction.json should have been written");
+        let bytes = map
+            .get(&vol_key)
+            .expect("instruction.json should have been written");
         let instruction: crate::directive::Instruction =
             serde_json::from_slice(bytes).expect("instruction.json should deserialize");
         assert!(
-            instruction.directive.contains("CUSTOM PLANNING for alice/proj issue #99"),
+            instruction
+                .directive
+                .contains("CUSTOM PLANNING for alice/proj issue #99"),
             "directive should contain custom prompt, got: {}",
             instruction.directive
         );
