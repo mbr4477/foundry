@@ -128,7 +128,7 @@ pub fn render_template(template: &str, ctx: &DirectiveContext) -> String {
     result
 }
 
-pub fn apply_phase_prompt(
+pub fn build_phase_prompt(
     base: String,
     phase_cfg: Option<&PhasePromptConfig>,
     ctx: &DirectiveContext,
@@ -155,7 +155,7 @@ pub fn build_instruction(ctx: &DirectiveContext, phase_cfg: Option<&PhasePromptC
         },
         issue_number: ctx.issue_number,
         pr_number: ctx.pr_number,
-        directive: apply_phase_prompt(build_default_prompt(ctx), phase_cfg, ctx),
+        directive: build_phase_prompt(build_default_prompt(ctx), phase_cfg, ctx),
     }
 }
 
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn apply_phase_prompt_returns_base_when_no_config() {
         let ctx = planning_ctx();
-        let result = apply_phase_prompt("default".to_string(), None, &ctx);
+        let result = build_phase_prompt("default".to_string(), None, &ctx);
         assert_eq!(result, "default");
     }
 
@@ -178,7 +178,7 @@ mod tests {
             prompt_append: None,
         };
         let ctx = planning_ctx();
-        let result = apply_phase_prompt("default".to_string(), Some(&cfg), &ctx);
+        let result = build_phase_prompt("default".to_string(), Some(&cfg), &ctx);
         assert_eq!(result, "custom alice");
     }
 
@@ -189,7 +189,7 @@ mod tests {
             prompt_append: Some("extra {{repo}}".to_string()),
         };
         let ctx = planning_ctx();
-        let result = apply_phase_prompt("default".to_string(), Some(&cfg), &ctx);
+        let result = build_phase_prompt("default".to_string(), Some(&cfg), &ctx);
         assert_eq!(result, "default\n\nextra myproject");
     }
 
@@ -200,7 +200,7 @@ mod tests {
             prompt_append: Some("appended".to_string()),
         };
         let ctx = planning_ctx();
-        let result = apply_phase_prompt("default".to_string(), Some(&cfg), &ctx);
+        let result = build_phase_prompt("default".to_string(), Some(&cfg), &ctx);
         assert_eq!(result, "custom\n\nappended");
     }
 
@@ -211,7 +211,7 @@ mod tests {
             prompt_append: Some("extra".to_string()),
         };
         let ctx = planning_ctx();
-        let result = apply_phase_prompt("default".to_string(), Some(&cfg), &ctx);
+        let result = build_phase_prompt("default".to_string(), Some(&cfg), &ctx);
         // empty prompt → use default base; then append
         assert_eq!(result, "default\n\nextra");
     }
@@ -223,7 +223,7 @@ mod tests {
             prompt_append: Some("".to_string()),
         };
         let ctx = planning_ctx();
-        let result = apply_phase_prompt("default".to_string(), Some(&cfg), &ctx);
+        let result = build_phase_prompt("default".to_string(), Some(&cfg), &ctx);
         assert_eq!(result, "default");
     }
 
