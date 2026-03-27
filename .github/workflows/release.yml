@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build foundryd (${{ matrix.asset_name }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_name: linux-amd64
+          - os: macos-latest
+            asset_name: macos-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            foundry/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('foundry/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        working-directory: foundry
+        run: cargo build --release -p foundryd
+
+      - name: Rename binary
+        run: cp foundry/target/release/foundryd foundryd-${{ matrix.asset_name }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: foundryd-${{ matrix.asset_name }}
