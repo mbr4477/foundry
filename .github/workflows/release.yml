@@ -10,8 +10,16 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build foundryd (amd64 Linux)
-    runs-on: ubuntu-latest
+    name: Build foundryd (${{ matrix.asset_name }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_name: linux-amd64
+          - os: macos-latest
+            asset_name: macos-arm64
 
     steps:
       - name: Checkout
@@ -35,7 +43,10 @@ jobs:
         working-directory: foundry
         run: cargo build --release -p foundryd
 
+      - name: Rename binary
+        run: cp foundry/target/release/foundryd foundryd-${{ matrix.asset_name }}
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: foundry/target/release/foundryd
+          files: foundryd-${{ matrix.asset_name }}
