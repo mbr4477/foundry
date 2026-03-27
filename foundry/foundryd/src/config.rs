@@ -15,6 +15,19 @@ impl SecretValue {
     }
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct PhasePromptConfig {
+    pub prompt: Option<String>,
+    pub prompt_append: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct PromptsConfig {
+    pub planning: Option<PhasePromptConfig>,
+    pub implementing: Option<PhasePromptConfig>,
+    pub in_review: Option<PhasePromptConfig>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
@@ -26,6 +39,8 @@ pub struct Config {
     pub commands: CommandsConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub prompts: PromptsConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -209,5 +224,116 @@ bot_email = "bot@local"
     fn secret_value_returns_literal_without_braces() {
         let result = SecretValue::resolve("plain-value").unwrap();
         assert_eq!(result, "plain-value");
+    }
+
+    #[test]
+    fn prompts_config_parses_when_present() {
+        let toml = r#"
+[server]
+listen_addr = "0.0.0.0:8477"
+webhook_secret = "s"
+[gitea]
+url = "http://g"
+url_from_runner = "http://g"
+api_token = "t"
+bot_username = "bot"
+bot_display_name = "Bot"
+bot_email = "bot@local"
+[container]
+image = "img"
+runtime = "docker"
+network = "net"
+memory_limit_mb = 512
+cpu_limit = 1.0
+max_concurrent = 1
+timeout_secs = 60
+[volumes]
+issue_prefix = "p"
+shared_volume = "s"
+home_volume = "h"
+[commands]
+approve = "/approve"
+[prompts.planning]
+prompt = "custom planning"
+prompt_append = "extra"
+[prompts.implementing]
+prompt_append = "impl extra"
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        let planning = config.prompts.planning.as_ref().unwrap();
+        assert_eq!(planning.prompt.as_deref(), Some("custom planning"));
+        assert_eq!(planning.prompt_append.as_deref(), Some("extra"));
+        let implementing = config.prompts.implementing.as_ref().unwrap();
+        assert!(implementing.prompt.is_none());
+        assert_eq!(implementing.prompt_append.as_deref(), Some("impl extra"));
+        assert!(config.prompts.in_review.is_none());
+    }
+
+    #[test]
+    fn prompts_config_defaults_when_absent() {
+        let toml = r#"
+[server]
+listen_addr = "0.0.0.0:8477"
+webhook_secret = "s"
+[gitea]
+url = "http://g"
+url_from_runner = "http://g"
+api_token = "t"
+bot_username = "bot"
+bot_display_name = "Bot"
+bot_email = "bot@local"
+[container]
+image = "img"
+runtime = "docker"
+network = "net"
+memory_limit_mb = 512
+cpu_limit = 1.0
+max_concurrent = 1
+timeout_secs = 60
+[volumes]
+issue_prefix = "p"
+shared_volume = "s"
+home_volume = "h"
+[commands]
+approve = "/approve"
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert!(config.prompts.planning.is_none());
+        assert!(config.prompts.implementing.is_none());
+        assert!(config.prompts.in_review.is_none());
+    }
+
+    #[test]
+    fn prompts_config_ignores_unknown_phase_keys() {
+        let toml = r#"
+[server]
+listen_addr = "0.0.0.0:8477"
+webhook_secret = "s"
+[gitea]
+url = "http://g"
+url_from_runner = "http://g"
+api_token = "t"
+bot_username = "bot"
+bot_display_name = "Bot"
+bot_email = "bot@local"
+[container]
+image = "img"
+runtime = "docker"
+network = "net"
+memory_limit_mb = 512
+cpu_limit = 1.0
+max_concurrent = 1
+timeout_secs = 60
+[volumes]
+issue_prefix = "p"
+shared_volume = "s"
+home_volume = "h"
+[commands]
+approve = "/approve"
+[prompts.done]
+prompt = "should be ignored"
+"#;
+        let result = Config::from_toml(toml);
+        assert!(result.is_ok(), "Unknown prompt phase key should be silently ignored");
     }
 }

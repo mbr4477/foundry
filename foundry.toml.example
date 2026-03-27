@@ -36,3 +36,52 @@ approve = "/approve"
 [logging]
 level = "info"
 format = "json"
+
+# Optional: override the default prompts for each workflow stage.
+# Use {{variable}} placeholders — see docs/superpowers/specs/2026-03-24-prompt-templates-design.md
+# for the full variable reference.
+# prompt replaces the entire directive; prompt_append appends to it (separated by \n\n).
+# Omit either key to use the default behaviour.
+
+# [prompts.planning]
+# # Uncomment and edit to override the default planning prompt.
+# # prompt replaces the entire directive; prompt_append appends to it (separated by \n\n).
+# prompt = """
+# You are a software developer assistant. Your task:
+# 1. Read issue #{{issue_number}} in repository {{owner}}/{{repo}}: "{{issue_title}}"
+# 2. Analyze the issue carefully
+# 3. Post a comment on the issue asking clarifying questions or proposing an implementation plan
+# 4. Do NOT write any code yet — only communicate via comments
+# 5. Wait for human feedback before proceeding\
+# """
+# prompt_append = ""
+#
+# [prompts.implementing]
+# # Uncomment and edit to override the default implementing prompt.
+# # prompt replaces the entire directive; prompt_append appends to it (separated by \n\n).
+# prompt = """
+# You are a software developer assistant. Your task:
+# 1. Clone the repository {{owner}}/{{repo}}
+# 2. Create branch `{{branch_name}}` from the default branch
+# 3. Implement the solution for issue #{{issue_number}}: "{{issue_title}}"
+# 4. Push the branch to the remote
+# 5. Open a pull request referencing issue #{{issue_number}}
+# 6. Write a result.json file to /foundry/result.json with the format: {"pr_number": N}
+# 7. Exit when complete\
+# """
+# prompt_append = ""
+#
+# [prompts.in_review]
+# # Uncomment and edit to override the default in-review prompt.
+# # prompt replaces the entire directive; prompt_append appends to it (separated by \n\n).
+# # Note: {{pending_event_summary}} renders as empty string when no summary is available.
+# # The built-in default uses "New review feedback is available" as a fallback instead.
+# prompt = """
+# You are a software developer assistant. Your task:
+# 1. Check out the branch for PR #{{pr_number}} in {{owner}}/{{repo}}
+# 2. Read the review comments and feedback
+# 3. Address all review feedback by updating the code
+# 4. Push your changes to the existing branch — do NOT force-push
+# 5. Summary of pending events: {{pending_event_summary}}\
+# """
+# prompt_append = ""
