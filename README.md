@@ -18,10 +18,10 @@ This installs the `foundryd` binary (to `/usr/local/bin` by default) and pulls t
 
 ```shell
 # Pin to a specific version
-FOUNDRYD_VERSION=v0.2.0 curl -fsSL https://raw.githubusercontent.com/mbr4477/foundry/main/scripts/install.sh | sh
+FOUNDRYD_VERSION=v0.2.0 curl -fsSL https://raw.githubusercontent.com/mbr4477/foundry/refs/heads/main/scripts/install.sh | sh
 
 # Install to a custom directory (no sudo required)
-INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/mbr4477/foundry/main/scripts/install.sh | sh
+INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/mbr4477/foundry/refs/heads/main/scripts/install.sh | sh
 ```
 
 ### From Source
