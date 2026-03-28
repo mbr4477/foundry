@@ -6,11 +6,31 @@ Interact with Claude Code via a local or self-hosted Gitea instance.
 
 Requires Docker.
 
-- TODO(mbr4477) Add Windows/Linux/Mac install from binary instructions
+### Linux / macOS (recommended)
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/mbr4477/foundry/main/scripts/install.sh | sh
+```
+
+This installs the `foundryd` binary (to `/usr/local/bin` by default) and pulls the matching `foundry-runner` container image.
+
+**Options:**
+
+```shell
+# Pin to a specific version
+FOUNDRYD_VERSION=v0.2.0 curl -fsSL https://raw.githubusercontent.com/mbr4477/foundry/main/scripts/install.sh | sh
+
+# Install to a custom directory (no sudo required)
+INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/mbr4477/foundry/main/scripts/install.sh | sh
+```
 
 ### From Source
 
-- TODO(mbr4477) Add install from source instructions
+```shell
+git clone https://github.com/mbr4477/foundry.git
+cd foundry/foundry
+cargo build --release -p foundryd
+```
 
 ## Getting Started
 
