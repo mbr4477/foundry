@@ -8,25 +8,30 @@ const PLANNING_DEFAULT_PROMPT: &str =
      2. Analyze the issue carefully\n\
      3. Post a comment on the issue asking clarifying questions or proposing an implementation plan\n\
      4. Do NOT write any code yet — only communicate via comments\n\
-     5. Wait for human feedback before proceeding";
+     5. Wait for human feedback before proceeding
+     6. Always post a comment at the end of your turn to update the user with your status.";
 
 const IMPLEMENTING_DEFAULT_PROMPT: &str =
     "You are a software developer assistant. Your task:\n\
-     1. Clone the repository {{owner}}/{{repo}}\n\
-     2. Create branch `{{branch_name}}` from the default branch\n\
-     3. Implement the solution for issue #{{issue_number}}: \"{{issue_title}}\"\n\
-     4. Push the branch to the remote\n\
-     5. Open a pull request referencing issue #{{issue_number}}\n\
-     6. Write a result.json file to /foundry/result.json with the format: {\"pr_number\": N}\n\
-     7. Exit when complete";
+    1. Comment on #{{issue_number}} in repository {{owner}}/{{repo}} to acknowledge the user's approval\n\
+    2. Clone the repository {{owner}}/{{repo}}\n\
+    3. Create branch `{{branch_name}}` from the default branch\n\
+    4. Read all comments for issue #{{issue_number}}: \"{{issue_title}}\"\n\
+    5. Implement the plan outlined in the issue comments\n\
+    6. Dispatch an independent subagent to review the implementation for code quality and errors. Fix any findings.\n\
+    7. Push the branch to the remote\n\
+    8. Open a pull request referencing issue #{{issue_number}}\n\
+    9. Add a comment to the issue referencing the pull request\n\
+    10. Write a result.json file to /foundry/result.json with the format: {\"pr_number\": N}\n\
+    11. Exit when complete";
 
-const IN_REVIEW_DEFAULT_PROMPT: &str =
-    "You are a software developer assistant. Your task:\n\
-     1. Check out the branch for PR #{{pr_number}} in {{owner}}/{{repo}}\n\
-     2. Read the review comments and feedback\n\
-     3. Address all review feedback by updating the code\n\
-     4. Push your changes to the existing branch — do NOT force-push\n\
-     5. Summary of pending events: {{pending_event_summary}}";
+const IN_REVIEW_DEFAULT_PROMPT: &str = "You are a software developer assistant. Your task:\n\
+    1. Check out the branch for PR #{{pr_number}} in {{owner}}/{{repo}}\n\
+    2. Read the review comments and feedback\n\
+    3. Address all review feedback by updating the code\n\
+    4. Push your changes to the existing branch — do NOT force-push\n\
+    6. Add a reply to the review explaining your changes or asking clarifying questions\n\
+    7. Summary of pending events: {{pending_event_summary}}";
 
 const DONE_DEFAULT_PROMPT: &str = "Exit immediately — this issue is done.";
 
@@ -100,7 +105,10 @@ pub fn render_template(template: &str, ctx: &DirectiveContext) -> String {
         ("bot_username", &ctx.bot_username),
         ("branch_name", ctx.branch_name.as_deref().unwrap_or("")),
         ("pr_number", &pr_number_str),
-        ("pending_event_summary", ctx.pending_event_summary.as_deref().unwrap_or("")),
+        (
+            "pending_event_summary",
+            ctx.pending_event_summary.as_deref().unwrap_or(""),
+        ),
     ];
 
     let mut result = String::with_capacity(template.len());
@@ -146,7 +154,10 @@ pub fn build_phase_prompt(
     }
 }
 
-pub fn build_instruction(ctx: &DirectiveContext, phase_cfg: Option<&PhasePromptConfig>) -> Instruction {
+pub fn build_instruction(
+    ctx: &DirectiveContext,
+    phase_cfg: Option<&PhasePromptConfig>,
+) -> Instruction {
     Instruction {
         phase: ctx.phase.to_string(),
         repo: InstructionRepo {
@@ -277,24 +288,42 @@ mod tests {
         let ctx = planning_ctx();
         let directive = build_default_prompt(&ctx);
         assert!(directive.contains("issue #42"), "Should mention issue #42");
-        assert!(directive.contains("alice/myproject"), "Should mention alice/myproject");
-        assert!(!directive.contains("write") || directive.contains("Do NOT write"), "Should not instruct to write code");
+        assert!(
+            directive.contains("alice/myproject"),
+            "Should mention alice/myproject"
+        );
+        assert!(
+            !directive.contains("write") || directive.contains("Do NOT write"),
+            "Should not instruct to write code"
+        );
     }
 
     #[test]
     fn implementing_mentions_branch_and_result_json() {
         let ctx = implementing_ctx();
         let directive = build_default_prompt(&ctx);
-        assert!(directive.contains("foundry/issue-7"), "Should mention branch name");
-        assert!(directive.contains("result.json"), "Should mention result.json");
+        assert!(
+            directive.contains("foundry/issue-7"),
+            "Should mention branch name"
+        );
+        assert!(
+            directive.contains("result.json"),
+            "Should mention result.json"
+        );
     }
 
     #[test]
     fn in_review_mentions_pr_and_no_force_push() {
         let ctx = in_review_ctx();
         let directive = build_default_prompt(&ctx);
-        assert!(directive.contains("PR #11") || directive.contains("#11"), "Should mention PR #11");
-        assert!(directive.contains("force-push") || directive.contains("force push"), "Should warn about force-push");
+        assert!(
+            directive.contains("PR #11") || directive.contains("#11"),
+            "Should mention PR #11"
+        );
+        assert!(
+            directive.contains("force-push") || directive.contains("force push"),
+            "Should warn about force-push"
+        );
     }
 
     #[test]
@@ -362,7 +391,10 @@ mod tests {
             gitea_url: "http://g".into(),
             bot_username: "bot".into(),
         };
-        let result = render_template("b={{branch_name}} p={{pr_number}} s={{pending_event_summary}}", &ctx);
+        let result = render_template(
+            "b={{branch_name}} p={{pr_number}} s={{pending_event_summary}}",
+            &ctx,
+        );
         assert_eq!(result, "b= p= s=");
     }
 
