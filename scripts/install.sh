@@ -40,9 +40,11 @@ ARCH="$(uname -m)"
 
 case "${OS}-${ARCH}" in
     Linux-x86_64)   ASSET="foundryd-linux-amd64" ;;
+    Linux-arm64)    ASSET="foundryd-linux-arm64" ;;
+    Linux-aarch64)  ASSET="foundryd-linux-arm64" ;;
     Darwin-arm64)   ASSET="foundryd-macos-arm64" ;;
     Darwin-aarch64) ASSET="foundryd-macos-arm64" ;;
-    *) die "Unsupported platform: ${OS} ${ARCH}. Supported: Linux x86_64, macOS arm64" ;;
+    *) die "Unsupported platform: ${OS} ${ARCH}. Supported: Linux x86_64, Linux arm64, macOS arm64" ;;
 esac
 
 # Resolve version
