@@ -162,7 +162,22 @@ EOF
 fi
 
 # Start Gitea
-## TODO
+say "Starting Gitea..."
+docker compose -f "${CONFIG_DIR}/docker-compose.yml" up -d
+
+# Wait for Gitea to respond on the host
+say "Waiting for Gitea to be ready..."
+GITEA_URL="${GITEA_URL:-http://localhost:3000}"
+i=0
+while [ "$i" -lt 12 ]; do
+    if ${DOWNLOAD} "${GITEA_URL}/" > /dev/null 2>&1; then
+        say "Gitea is ready."
+        break
+    fi
+    i=$((i + 1))
+    [ "$i" -lt 12 ] || die "Gitea did not become ready after 60s"
+    sleep 5
+done
 
 # Configure Gitea
 ## TODO
