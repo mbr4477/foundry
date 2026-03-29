@@ -26,6 +26,8 @@ Options (flags take precedence over env vars):
                             [env: FOUNDRY_WEBHOOK_SECRET]
   --bot-username USER       Bot account username [env: FOUNDRY_BOT_USERNAME, default: foundry-bot]
   --bot-email EMAIL         Bot account email [env: FOUNDRY_BOT_EMAIL, default: foundry-bot@gitea.local]
+  --mcp-config PATH         Path to mcp-config.json to copy into the foundry-shared volume
+                            [env: MCP_CONFIG_PATH, default: relative to script location]
   -h, --help                Show this help
 EOF
     exit 1
@@ -42,6 +44,7 @@ WEBHOOK_URL="${FOUNDRY_WEBHOOK_URL:-}"
 WEBHOOK_SECRET="${FOUNDRY_WEBHOOK_SECRET:-}"
 BOT_USERNAME="${FOUNDRY_BOT_USERNAME:-foundry-bot}"
 BOT_EMAIL="${FOUNDRY_BOT_EMAIL:-foundry-bot@gitea.local}"
+MCP_CONFIG_PATH="${MCP_CONFIG_PATH:-}"
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
 
@@ -56,6 +59,7 @@ while [[ $# -gt 0 ]]; do
         --webhook-secret)  WEBHOOK_SECRET="$2";  shift 2 ;;
         --bot-username)    BOT_USERNAME="$2";    shift 2 ;;
         --bot-email)       BOT_EMAIL="$2";       shift 2 ;;
+        --mcp-config)      MCP_CONFIG_PATH="$2"; shift 2 ;;
         -h|--help)         usage ;;
         *) echo "Unknown option: $1" >&2; usage ;;
     esac
@@ -215,8 +219,11 @@ fi
 
 echo "[5/6] Populating foundry-shared volume with mcp-config.json..."
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MCP_CONFIG_SRC="${SCRIPT_DIR}/../foundry/foundry-runner/mcp-config.json"
+if [[ -z "$MCP_CONFIG_PATH" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    MCP_CONFIG_PATH="${SCRIPT_DIR}/../foundry/foundry-runner/mcp-config.json"
+fi
+MCP_CONFIG_SRC="$MCP_CONFIG_PATH"
 
 if [[ ! -f "$MCP_CONFIG_SRC" ]]; then
     echo "ERROR: mcp-config.json not found at ${MCP_CONFIG_SRC}" >&2

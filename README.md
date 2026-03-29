@@ -12,16 +12,19 @@ Requires Docker.
 curl -fsSL https://raw.githubusercontent.com/mbr4477/foundry/main/scripts/install.sh | sh
 ```
 
-This installs the `foundryd` binary (to `/usr/local/bin` by default) and pulls the matching `foundry-runner` container image.
+This installs the `foundryd` binary (to `~/.local/bin` by default) and pulls the matching `foundry-runner` container image.
 
 **Options:**
 
 ```shell
-# Pin to a specific version
+# Pin to a specific release version
 FOUNDRYD_VERSION=v0.2.0 curl -fsSL https://raw.githubusercontent.com/mbr4477/foundry/refs/heads/main/scripts/install.sh | sh
 
 # Install to a custom directory (no sudo required)
 INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/mbr4477/foundry/refs/heads/main/scripts/install.sh | sh
+
+# Pull install scripts from a specific branch
+FOUNDRY_REF=my-branch curl -fsSL https://raw.githubusercontent.com/mbr4477/foundry/refs/heads/my-branch/scripts/install.sh | sh
 ```
 
 ### From Source
