@@ -180,7 +180,39 @@ while [ "$i" -lt 12 ]; do
 done
 
 # Configure Gitea
-## TODO
+ADMIN_USERNAME="${FOUNDRY_ADMIN_USERNAME:-gitea-admin}"
+ADMIN_PASSWORD="${FOUNDRY_ADMIN_PASSWORD:-}"
+ADMIN_EMAIL="${FOUNDRY_ADMIN_EMAIL:-gitea-admin@foundry.local}"
+BOT_USERNAME="${FOUNDRY_BOT_USERNAME:-foundry-bot}"
+BOT_EMAIL="${BOT_USERNAME:-foundry-bot@foundry.local}"
+FOUNDRY_WEBHOOK_URL="${FOUNDRY_WEBHOOK_URL:-http://host.docker.internal:8477/webhook}"
+WEBHOOK_SECRET="${FOUNDRY_WEBHOOK_SECRET:-}"
+
+## Ensure admin password
+while [ -z "$ADMIN_PASSWORD" ]; do
+    stty -echo
+    printf "Set gitea-admin password: "
+    read -r ADMIN_PASSWORD
+    stty echo
+    echo
+done
+
+while [ -z "$ADMIN_PASSWORD_CONFIRM" ]; do
+    stty -echo
+    printf "Confirm gitea-admin password: "
+    read -r ADMIN_PASSWORD_CONFIRM
+    stty echo
+    echo
+done
+
+if [ "${ADMIN_PASSWORD}" != "${ADMIN_PASSWORD_CONFIRM}" ]; then
+    die "Passwords did not match"
+fi
+
+## TODO: Ensure admin user
+## TODO: Ensure bot user
+## TODO: Ensure admin webhook
+## TODO: Ensure bot token
 
 # Configure foundry.toml
 if [ ! -f "${CONFIG_DIR}/foundry.toml" ]; then
