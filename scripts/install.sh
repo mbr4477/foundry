@@ -163,7 +163,7 @@ fi
 
 # Start Gitea
 say "Starting Gitea..."
-docker compose -f "${CONFIG_DIR}/docker-compose.yml" up -d
+docker compose -f "${CONFIG_DIR}/gitea/docker-compose.yml" up -d
 
 # Wait for Gitea to respond on the host
 say "Waiting for Gitea to be ready..."
