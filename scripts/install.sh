@@ -8,6 +8,8 @@ CONFIG_DIR="${HOME}/.config/foundry"
 FOUNDRY_REF="${FOUNDRY_REF:-main}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/refs/heads/${FOUNDRY_REF}"
 
+GITEA_CONTAINER="${GITEA_CONTAINER:-gitea}"
+
 # Helpers
 
 say()  { printf '%s\n' "$*"; }
@@ -124,6 +126,7 @@ if [ ! -f "${CONFIG_DIR}/gitea/docker-compose.yml" ]; then
 services:
   gitea:
     image: gitea/gitea:latest
+    container_name: ${GITEA_CONTAINER}
     restart: unless-stopped
     environment:
       - USER_UID=1000
@@ -163,7 +166,7 @@ fi
 
 # Start Gitea
 say "Starting Gitea..."
-docker compose -f "${CONFIG_DIR}/gitea/docker-compose.yml" up -d
+docker compose -f "${CONFIG_DIR}/gitea/docker-compose.yml" up -d gitea 
 
 # Wait for Gitea to respond on the host
 say "Waiting for Gitea to be ready..."
@@ -184,33 +187,64 @@ ADMIN_USERNAME="${FOUNDRY_ADMIN_USERNAME:-gitea-admin}"
 ADMIN_PASSWORD="${FOUNDRY_ADMIN_PASSWORD:-}"
 ADMIN_EMAIL="${FOUNDRY_ADMIN_EMAIL:-gitea-admin@foundry.local}"
 BOT_USERNAME="${FOUNDRY_BOT_USERNAME:-foundry-bot}"
-BOT_EMAIL="${BOT_USERNAME:-foundry-bot@foundry.local}"
+BOT_EMAIL="${FOUNDRY_BOT_EMAIL:-foundry-bot@foundry.local}"
 FOUNDRY_WEBHOOK_URL="${FOUNDRY_WEBHOOK_URL:-http://host.docker.internal:8477/webhook}"
 WEBHOOK_SECRET="${FOUNDRY_WEBHOOK_SECRET:-}"
 
-## Ensure admin password
-while [ -z "$ADMIN_PASSWORD" ]; do
-    stty -echo
-    printf "Set gitea-admin password: "
-    read -r ADMIN_PASSWORD
-    stty echo
-    echo
-done
+## Helpers
+gitea_cli() {
+    docker exec --user git "$GITEA_CONTAINER" gitea "$@"
+}
 
-while [ -z "$ADMIN_PASSWORD_CONFIRM" ]; do
-    stty -echo
-    printf "Confirm gitea-admin password: "
-    read -r ADMIN_PASSWORD_CONFIRM
-    stty echo
-    echo
-done
+## Ensure admin user
+echo "Creating Gitea admin user @${ADMIN_USERNAME}..."
+if gitea_cli admin user list --admin 2>/dev/null | grep -q "${ADMIN_USERNAME}"; then
+    echo "        Already exists - skipped."
+else
+    ## Ensure admin password
+    while [ -z "$ADMIN_PASSWORD" ]; do
+        stty -echo
+        printf "Set gitea-admin password: "
+        read -r ADMIN_PASSWORD
+        stty echo
+        echo
+    done
+    
+    while [ -z "$ADMIN_PASSWORD_CONFIRM" ]; do
+        stty -echo
+        printf "Confirm gitea-admin password: "
+        read -r ADMIN_PASSWORD_CONFIRM
+        stty echo
+        echo
+    done
+    
+    if [ "${ADMIN_PASSWORD}" != "${ADMIN_PASSWORD_CONFIRM}" ]; then
+        die "Passwords did not match"
+    fi
 
-if [ "${ADMIN_PASSWORD}" != "${ADMIN_PASSWORD_CONFIRM}" ]; then
-    die "Passwords did not match"
+    gitea_cli admin user create \
+        --username "$ADMIN_USERNAME" \
+        --password "$ADMIN_PASSWORD" \
+        --email "$ADMIN_EMAIL" \
+        --admin \
+        --must-change-password=false
+    echo "        Created."
 fi
 
-## TODO: Ensure admin user
-## TODO: Ensure bot user
+echo "Creating Gitea bot user @${BOT_USERNAME}..."
+if gitea_cli admin user list 2>/dev/null | grep -q "${BOT_USERNAME}"; then
+    echo "        Already exists - skipped."
+else
+    BOT_PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 || true)
+    gitea_cli admin user create \
+        --username "$BOT_USERNAME" \
+        --password "$BOT_PASSWORD" \
+        --email "$BOT_EMAIL" \
+        --must-change-password=false
+    echo "        Created."
+fi
+
+
 ## TODO: Ensure admin webhook
 ## TODO: Ensure bot token
 
