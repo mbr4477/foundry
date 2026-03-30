@@ -244,9 +244,18 @@ else
     echo "        Created."
 fi
 
+## Create bot token
+echo "Creating Gitea token 'foundry' for @${BOT_USERNAME}..."
+BOT_TOKEN=$(gitea_cli admin user generate-access-token -u "${BOT_USERNAME}" --token-name foundry --raw 2>/dev/null || echo "EXISTS")
+if [ "${BOT_TOKEN}" = "EXISTS" ]; then
+    echo "        Token 'foundry' already exists."
+    echo "        This token value cannot be recovered. Delete it in Gitea and re-run if you need a new one."
+else
+    echo "        BOT_TOKEN=$BOT_TOKEN"
+    echo "        WARNING: This token will not be shown again!"
+fi
 
 ## TODO: Ensure admin webhook
-## TODO: Ensure bot token
 
 # Configure foundry.toml
 if [ ! -f "${CONFIG_DIR}/foundry.toml" ]; then
