@@ -188,12 +188,42 @@ ADMIN_PASSWORD="${FOUNDRY_ADMIN_PASSWORD:-}"
 ADMIN_EMAIL="${FOUNDRY_ADMIN_EMAIL:-gitea-admin@foundry.local}"
 BOT_USERNAME="${FOUNDRY_BOT_USERNAME:-foundry-bot}"
 BOT_EMAIL="${FOUNDRY_BOT_EMAIL:-foundry-bot@foundry.local}"
-FOUNDRY_WEBHOOK_URL="${FOUNDRY_WEBHOOK_URL:-http://host.docker.internal:8477/webhook}"
+WEBHOOK_URL="${FOUNDRY_WEBHOOK_URL:-http://host.docker.internal:8477/webhook}"
 WEBHOOK_SECRET="${FOUNDRY_WEBHOOK_SECRET:-}"
 
 ## Helpers
 gitea_cli() {
     docker exec --user git "$GITEA_CONTAINER" gitea "$@"
+}
+
+gitea_api_call() {
+    local method="$1"
+    local path="$2"
+    local body="${3:-}"
+
+    local _tmp
+    _tmp=$(mktemp)
+    local args="-s -o $_tmp -w %{http_code} -u ${ADMIN_USERNAME}:${ADMIN_PASSWORD} -H \"Content-Type: application/json\" -H \"Accept: application/json\" -X $method"
+    [ -n "$body" ] && args="$args -d $body"
+
+    _status=$(curl ${args} "${GITEA_URL}/api/v1${path}") || {
+        echo "ERROR: curl network error for $method /api/v1${path}" >&2
+        rm -f "$_tmp"
+        return 1
+    }
+
+    echo $_status
+
+    if [ "$_status" -lt 200 ] || [ "$_status" -ge 300 ]; then
+        echo "ERROR: API $method /api/v1${path} returned HTTP $_status:" >&2
+        cat "$_tmp" >&2
+        printf '\n' >&2
+        rm -f "$_tmp"
+        return 1
+    fi
+
+    cat "$_tmp"
+    rm -f "$_tmp"
 }
 
 ## Ensure admin user
@@ -203,18 +233,18 @@ if gitea_cli admin user list --admin 2>/dev/null | grep -q "${ADMIN_USERNAME}"; 
 else
     ## Ensure admin password
     while [ -z "$ADMIN_PASSWORD" ]; do
-        stty -echo
-        printf "Set gitea-admin password: "
-        read -r ADMIN_PASSWORD
-        stty echo
+        stty -F /dev/tty -echo
+        printf "Set ${ADMIN_USERNAME} password: "
+        read -r ADMIN_PASSWORD < /dev/tty
+        stty -F /dev/tty echo
         echo
     done
     
     while [ -z "$ADMIN_PASSWORD_CONFIRM" ]; do
-        stty -echo
-        printf "Confirm gitea-admin password: "
-        read -r ADMIN_PASSWORD_CONFIRM
-        stty echo
+        stty -F /dev/tty -echo
+        printf "Confirm ${ADMIN_USERNAME} password: "
+        read -r ADMIN_PASSWORD_CONFIRM < /dev/tty
+        stty -F /dev/tty echo
         echo
     done
     
@@ -255,7 +285,26 @@ else
     echo "        WARNING: This token will not be shown again!"
 fi
 
-## TODO: Ensure admin webhook
+## Create the admin hook
+echo "Registering system webhook..."
+WEBHOOK_EVENTS='["issues","issue_comment","pull_request","pull_request_review"]'
+while [ -z "${ADMIN_PASSWORD}" ]; do
+    stty -F /dev/tty -echo
+    printf "        Enter ${ADMIN_USERNAME} password: "
+    read -r ADMIN_PASSWORD < /dev/tty
+    stty -F /dev/tty echo
+    echo
+done
+if [ -z "$WEBHOOK_SECRET" ]; then
+    WEBHOOK_SECRET=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 || true)
+    echo "        WEBHOOK_SECRET=${WEBHOOK_SECRET}"        
+fi
+WEBHOOK_EVENTS='["issues","issue_comment","pull_request","pull_request_review"]'
+WEBHOOK_CONFIG="{\"url\":\"${WEBHOOK_URL}\",\"content_type\":\"json\",\"secret\":\"${WEBHOOK_SECRET}\"}"
+WEBHOOK_BODY="{\"type\":\"gitea\",\"config\":${WEBHOOK_CONFIG},\"events\":${WEBHOOK_EVENTS},\"active\":true}"
+echo $WEBHOOK_BODY
+WEBHOOK_ID=$(gitea_api_call POST /admin/hooks $WEBHOOK_BODY)
+echo "        Created webhook: $WEBHOOK_ID"
 
 # Configure foundry.toml
 if [ ! -f "${CONFIG_DIR}/foundry.toml" ]; then
