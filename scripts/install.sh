@@ -200,19 +200,22 @@ gitea_api_call() {
     local method="$1"
     local path="$2"
     local body="${3:-}"
+    local _tmp _status
 
-    local _tmp
     _tmp=$(mktemp)
-    local args="-s -o $_tmp -w %{http_code} -u ${ADMIN_USERNAME}:${ADMIN_PASSWORD} -H \"Content-Type: application/json\" -H \"Accept: application/json\" -X $method"
-    [ -n "$body" ] && args="$args -d $body"
 
-    _status=$(curl ${args} "${GITEA_URL}/api/v1${path}") || {
+    set -- -s -o "$_tmp" -w "%{http_code}" \
+           -u "${ADMIN_USERNAME}:${ADMIN_PASSWORD}" \
+           -H "Content-Type: application/json" \
+           -H "Accept: application/json" \
+           -X "$method"
+    [ -n "$body" ] && set -- "$@" -d "$body"
+
+    _status=$(curl "$@" "${GITEA_URL}/api/v1${path}") || {
         echo "ERROR: curl network error for $method /api/v1${path}" >&2
         rm -f "$_tmp"
         return 1
     }
-
-    echo $_status
 
     if [ "$_status" -lt 200 ] || [ "$_status" -ge 300 ]; then
         echo "ERROR: API $method /api/v1${path} returned HTTP $_status:" >&2
