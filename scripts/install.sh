@@ -19,6 +19,10 @@ check() { command -v "$1" >/dev/null 2>&1; }
 # Check prerequisites
 say "Checking prerequisites..."
 
+if ! check jq; then
+    die "jq not found"
+fi
+
 ## Downloader
 if check curl; then
     DOWNLOAD="curl -fsSL"
@@ -290,7 +294,6 @@ fi
 
 ## Create the admin hook
 echo "Registering system webhook..."
-WEBHOOK_EVENTS='["issues","issue_comment","pull_request","pull_request_review"]'
 while [ -z "${ADMIN_PASSWORD}" ]; do
     stty -F /dev/tty -echo
     printf "        Enter ${ADMIN_USERNAME} password: "
@@ -298,16 +301,25 @@ while [ -z "${ADMIN_PASSWORD}" ]; do
     stty -F /dev/tty echo
     echo
 done
-if [ -z "$WEBHOOK_SECRET" ]; then
-    WEBHOOK_SECRET=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 || true)
-    echo "        WEBHOOK_SECRET=${WEBHOOK_SECRET}"        
+EXISTING_WEBHOOK_ID=$(gitea_api_call GET "/admin/hooks?type=default" \
+    | jq -r --arg url "$WEBHOOK_URL" '.[] | select(.config.url==$url) | .id')
+
+if [ -z "$EXISTING_WEBHOOK_ID" ]; then
+    WEBHOOK_EVENTS='["issues","issue_comment","pull_request","pull_request_review"]'
+    if [ -z "$WEBHOOK_SECRET" ]; then
+        WEBHOOK_SECRET=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 || true)
+        echo "        WEBHOOK_SECRET=${WEBHOOK_SECRET}"        
+    fi
+    WEBHOOK_EVENTS='["issues","issue_comment","pull_request","pull_request_review"]'
+    WEBHOOK_CONFIG="{\"url\":\"${WEBHOOK_URL}\",\"content_type\":\"json\",\"secret\":\"${WEBHOOK_SECRET}\"}"
+    WEBHOOK_BODY="{\"type\":\"gitea\",\"config\":${WEBHOOK_CONFIG},\"events\":${WEBHOOK_EVENTS},\"active\":true}"
+    WEBHOOK_ID=$(gitea_api_call POST /admin/hooks $WEBHOOK_BODY | jq -r '.id')
+    echo "        Created webhook: $WEBHOOK_ID"
+else
+    echo "        Webhook already exists: id=$EXISTING_WEBHOOK_ID"
 fi
-WEBHOOK_EVENTS='["issues","issue_comment","pull_request","pull_request_review"]'
-WEBHOOK_CONFIG="{\"url\":\"${WEBHOOK_URL}\",\"content_type\":\"json\",\"secret\":\"${WEBHOOK_SECRET}\"}"
-WEBHOOK_BODY="{\"type\":\"gitea\",\"config\":${WEBHOOK_CONFIG},\"events\":${WEBHOOK_EVENTS},\"active\":true}"
-echo $WEBHOOK_BODY
-WEBHOOK_ID=$(gitea_api_call POST /admin/hooks $WEBHOOK_BODY)
-echo "        Created webhook: $WEBHOOK_ID"
+
+## Configure mcp-config.json
 
 # Configure foundry.toml
 if [ ! -f "${CONFIG_DIR}/foundry.toml" ]; then
