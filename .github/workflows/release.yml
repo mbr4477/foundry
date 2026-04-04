@@ -82,7 +82,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: ./foundry
+          context: ./foundry/foundry/foundry-runner
           file: ./foundry/foundry-runner/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}

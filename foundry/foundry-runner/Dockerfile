@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI globally
-RUN npm install -g @anthropic-ai/claude-code
+RUN curl -fsSL https://claude.ai/install.sh | bash 
 
 # Download the official gitea-mcp binary
 # Releases are tarballs on gitea.com; asset names use x86_64/arm64 conventions.
@@ -45,15 +45,18 @@ RUN su - foundry -c 'git config --global init.defaultBranch main' && \
 RUN mkdir -p /workspace && chown foundry:foundry /workspace
 
 # Copy entrypoint
-COPY foundry-runner/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Copy mcp config
+COPY mcp-config.json /etc/foundry/mcp-config.json 
 
 # Switch to non-root user
 USER foundry
 WORKDIR /workspace
 
 # Volumes mounted at runtime:
-#   /foundry/     — instruction.json (rw); result.json written here by Claude
-#   /etc/foundry/ — mcp-config.json (ro)
+#   /foundry/      — instruction.json (rw); result.json written here by Claude
+#   /home/foundry/ — home directory to preserve Claude settings and auth 
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -319,8 +319,6 @@ else
     echo "        Webhook already exists: id=$EXISTING_WEBHOOK_ID"
 fi
 
-## Configure mcp-config.json
-
 # Configure foundry.toml
 if [ ! -f "${CONFIG_DIR}/foundry.toml" ]; then
     RUNNER_VERSION="${VERSION#v}"
@@ -369,6 +367,8 @@ fi
 RUNNER_IMAGE="ghcr.io/mbr4477/foundry-runner:${VERSION#v}"
 say "Pulling container image ${RUNNER_IMAGE}..."
 docker pull "${RUNNER_IMAGE}"
+
+# TODO: Setup Linux systemd service
 
 # Done
 echo "Foundry ${VERSION} installed successfully!"
