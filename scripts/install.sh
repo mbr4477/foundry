@@ -284,6 +284,11 @@ if [ "${BOT_TOKEN}" = "EXISTS" ]; then
 else
     echo "        FOUNDRY_GITEA_TOKEN=$BOT_TOKEN"
     echo "        WARNING: This token will not be shown again!"
+    if [ -f "${CONFIG_DIR}/foundry.env" ]; then
+        sed -i "s/FOUNDRY_GITEA_TOKEN=.*\$/FOUNDRY_GITEA_TOKEN=${BOT_TOKEN}/" ${CONFIG_DIR}/foundry.env
+    else
+        echo "export FOUNDRY_GITEA_TOKEN=$BOT_TOKEN" > ${CONFIG_DIR}/foundry.env
+    fi
 fi
 
 ## Create the admin hook
