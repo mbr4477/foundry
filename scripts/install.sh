@@ -24,13 +24,7 @@ if ! check jq; then
 fi
 
 ## Downloader
-if check curl; then
-    DOWNLOAD="curl -fsSL"
-elif check wget; then
-    DOWNLOAD="wget -qO-"
-else
-    die "curl or wget is required but neither was found"
-fi
+DOWNLOAD="curl -fsSL"
 
 ## Docker
 if ! check docker; then
@@ -288,7 +282,7 @@ if [ "${BOT_TOKEN}" = "EXISTS" ]; then
     echo "        Token 'foundry' already exists."
     echo "        This token value cannot be recovered. Delete it in Gitea and re-run if you need a new one."
 else
-    echo "        BOT_TOKEN=$BOT_TOKEN"
+    echo "        FOUNDRY_GITEA_TOKEN=$BOT_TOKEN"
     echo "        WARNING: This token will not be shown again!"
 fi
 
