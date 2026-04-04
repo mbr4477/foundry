@@ -84,6 +84,8 @@ impl ContainerRuntime for DockerRuntime {
             env: Some(env),
             labels: Some(labels),
             host_config: Some(host_config),
+            entrypoint: spec.entrypoint_override.clone(),
+            user: spec.user.clone(),
             ..Default::default()
         };
 
@@ -383,5 +385,26 @@ mod tests {
         };
         let label_value = format!("{}/{}/{}", key.owner, key.repo, key.issue_number);
         assert_eq!(label_value, "alice/proj/1");
+    }
+
+    #[test]
+    fn container_spec_with_entrypoint_override_is_constructed() {
+        // Verify the fields are accepted without compile error; runtime behavior
+        // requires Docker and is covered by integration tests.
+        let spec = ContainerSpec {
+            image: "ubuntu:22.04".into(),
+            env: Default::default(),
+            mounts: vec![],
+            network: None,
+            memory_limit_bytes: None,
+            cpu_period: None,
+            cpu_quota: None,
+            labels: Default::default(),
+            timeout_secs: 30,
+            entrypoint_override: Some(vec!["/bin/sh".into(), "/etc/foundry/bootstrap.sh".into()]),
+            user: Some("1000".into()),
+        };
+        assert_eq!(spec.entrypoint_override.as_ref().unwrap()[0], "/bin/sh");
+        assert_eq!(spec.user.as_deref(), Some("1000"));
     }
 }
