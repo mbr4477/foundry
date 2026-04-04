@@ -88,6 +88,9 @@ pub struct ContainerConfig {
     pub cpu_limit: f64,
     pub max_concurrent: usize,
     pub timeout_secs: u64,
+    /// Run containers as this user. Required if the image defaults to root,
+    /// since claude --dangerously-skip-permissions refuses to run as root.
+    pub user: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -335,5 +338,70 @@ prompt = "should be ignored"
 "#;
         let result = Config::from_toml(toml);
         assert!(result.is_ok(), "Unknown prompt phase key should be silently ignored");
+    }
+
+    #[test]
+    fn container_config_user_defaults_to_none() {
+        let toml = r#"
+[server]
+listen_addr = "0.0.0.0:8477"
+webhook_secret = "s"
+[gitea]
+url = "http://g"
+url_from_runner = "http://g"
+api_token = "t"
+bot_username = "bot"
+bot_display_name = "Bot"
+bot_email = "bot@local"
+[container]
+image = "ubuntu:22.04"
+runtime = "docker"
+network = "foundry-net"
+memory_limit_mb = 512
+cpu_limit = 1.0
+max_concurrent = 1
+timeout_secs = 60
+[volumes]
+issue_prefix = "p"
+shared_volume = "s"
+home_volume = "h"
+[commands]
+approve = "/approve"
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert!(config.container.user.is_none());
+    }
+
+    #[test]
+    fn container_config_user_parses_when_set() {
+        let toml = r#"
+[server]
+listen_addr = "0.0.0.0:8477"
+webhook_secret = "s"
+[gitea]
+url = "http://g"
+url_from_runner = "http://g"
+api_token = "t"
+bot_username = "bot"
+bot_display_name = "Bot"
+bot_email = "bot@local"
+[container]
+image = "ubuntu:22.04"
+runtime = "docker"
+network = "foundry-net"
+memory_limit_mb = 512
+cpu_limit = 1.0
+max_concurrent = 1
+timeout_secs = 60
+user = "1000"
+[volumes]
+issue_prefix = "p"
+shared_volume = "s"
+home_volume = "h"
+[commands]
+approve = "/approve"
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert_eq!(config.container.user.as_deref(), Some("1000"));
     }
 }
