@@ -5,6 +5,7 @@ REPO="mbr4477/foundry"
 BINARY="foundryd"
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
 CONFIG_DIR="${HOME}/.config/foundry"
+ENV_FILE="${CONFIG_DIR}/foundry.env"
 FOUNDRY_REF="${FOUNDRY_REF:-main}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/refs/heads/${FOUNDRY_REF}"
 
@@ -16,6 +17,20 @@ GITEA_HOSTNAME=$(hostname).local
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 check() { command -v "$1" >/dev/null 2>&1; }
+set_env() {
+    key=$1
+    value=$2
+
+    if [ -f "$ENV_FILE" ]; then
+        if grep -q "$key=" $ENV_FILE; then
+            sed -i "s/$key=.*\$/$key=$value/" $ENV_FILE
+        else
+            echo "export $key=$value" >> $ENV_FILE
+        fi
+    else
+        echo "export $key=$value" > $ENV_FILE
+    fi
+}
 
 # Check prerequisites
 say "Checking prerequisites..."
@@ -285,11 +300,7 @@ if [ "${BOT_TOKEN}" = "EXISTS" ]; then
 else
     echo "        FOUNDRY_GITEA_TOKEN=$BOT_TOKEN"
     echo "        WARNING: This token will not be shown again!"
-    if [ -f "${CONFIG_DIR}/foundry.env" ]; then
-        sed -i "s/FOUNDRY_GITEA_TOKEN=.*\$/FOUNDRY_GITEA_TOKEN=${BOT_TOKEN}/" ${CONFIG_DIR}/foundry.env
-    else
-        echo "export FOUNDRY_GITEA_TOKEN=$BOT_TOKEN" > ${CONFIG_DIR}/foundry.env
-    fi
+    set_env FOUNDRY_GITEA_TOKEN $BOT_TOKEN
 fi
 
 ## Create the admin hook
@@ -315,6 +326,7 @@ if [ -z "$EXISTING_WEBHOOK_ID" ]; then
     WEBHOOK_BODY="{\"type\":\"gitea\",\"config\":${WEBHOOK_CONFIG},\"events\":${WEBHOOK_EVENTS},\"active\":true}"
     WEBHOOK_ID=$(gitea_api_call POST /admin/hooks $WEBHOOK_BODY | jq -r '.id')
     echo "        Created webhook: $WEBHOOK_ID"
+    set_env FOUNDRY_WEBHOOK_SECRET $WEBHOOK_SECRET
 else
     echo "        Webhook already exists: id=$EXISTING_WEBHOOK_ID"
 fi
