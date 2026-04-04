@@ -9,6 +9,7 @@ FOUNDRY_REF="${FOUNDRY_REF:-main}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/refs/heads/${FOUNDRY_REF}"
 
 GITEA_CONTAINER="${GITEA_CONTAINER:-gitea}"
+GITEA_HOSTNAME=$(hostname).local
 
 # Helpers
 
@@ -89,7 +90,7 @@ esac
 # Configure app.ini for Gitea
 mkdir -p "${CONFIG_DIR}/gitea"
 if [ ! -f "${CONFIG_DIR}/gitea/app.ini" ]; then
-    cat > "${CONFIG_DIR}/gitea/app.ini" <<'EOF'
+    cat > "${CONFIG_DIR}/gitea/app.ini" <<EOF
 APP_NAME = Gitea
 WORK_PATH = /data/gitea
 
@@ -98,9 +99,9 @@ DB_TYPE = sqlite3
 PATH = /data/gitea/gitea.db
 
 [server]
-DOMAIN = localhost
+DOMAIN = ${GITEA_HOSTNAME}
 HTTP_PORT = 3000
-ROOT_URL = http://localhost:3000/
+ROOT_URL = http://${GITEA_HOSTNAME}:3000/
 
 [webhook]
 ALLOWED_HOST_LIST = *
