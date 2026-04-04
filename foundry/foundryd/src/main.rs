@@ -19,6 +19,33 @@ struct Args {
     config: String,
 }
 
+const BOOTSTRAP_SH: &str = r#"#!/bin/sh
+set -eu
+
+# Install Claude Code
+curl -fsSL https://claude.ai/install.sh | sh
+
+# Ensure the install script's bin dir is in PATH
+export PATH="$HOME/.local/bin:$PATH"
+
+# Set up GIT_ASKPASS for HTTPS authentication
+ASKPASS="$(mktemp /tmp/git-askpass-XXXXXX.sh)"
+cat > "$ASKPASS" << 'EOF'
+#!/bin/sh
+case "$1" in
+  Username*) echo "${GITEA_BOT_USERNAME}" ;;
+  Password*) echo "${GITEA_ACCESS_TOKEN}" ;;
+esac
+EOF
+chmod +x "$ASKPASS"
+export GIT_ASKPASS="$ASKPASS"
+
+exec claude \
+    --dangerously-skip-permissions \
+    --mcp-config /etc/foundry/mcp-config.json \
+    -p "$FOUNDRY_DIRECTIVE"
+"#;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -46,6 +73,13 @@ async fn main() -> anyhow::Result<()> {
 
     let runtime: Arc<dyn foundry_core::traits::container_runtime::ContainerRuntime> =
         Arc::new(container::docker::DockerRuntime::new().await?);
+
+    // Write bootstrap.sh to shared volume so containers can install and run Claude Code
+    info!("Writing bootstrap.sh to shared volume");
+    runtime
+        .write_to_volume(&cfg.volumes.shared_volume, "bootstrap.sh", BOOTSTRAP_SH.as_bytes())
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to write bootstrap.sh to shared volume: {}", e))?;
 
     let cfg = Arc::new(cfg);
     let dispatcher = Arc::new(dispatcher::Dispatcher::new(
