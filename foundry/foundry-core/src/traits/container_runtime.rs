@@ -16,6 +16,10 @@ pub struct ContainerSpec {
     pub labels: HashMap<String, String>,
     /// Kill the container after this many seconds (0 = no limit).
     pub timeout_secs: u64,
+    /// Override the container image's entrypoint. If None, the image default is used.
+    pub entrypoint_override: Option<Vec<String>>,
+    /// Run the container as this user (e.g. "1000" or "foundry"). If None, image default is used.
+    pub user: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,4 +64,50 @@ pub trait ContainerRuntime: Send + Sync + 'static {
         label_value: Option<&str>,
     ) -> Result<Vec<String>, ContainerError>;
     async fn kill_container(&self, container_id: &str) -> Result<(), ContainerError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn container_spec_entrypoint_and_user_default_to_none() {
+        let spec = ContainerSpec {
+            image: "ubuntu:22.04".into(),
+            env: Default::default(),
+            mounts: vec![],
+            network: None,
+            memory_limit_bytes: None,
+            cpu_period: None,
+            cpu_quota: None,
+            labels: Default::default(),
+            timeout_secs: 60,
+            entrypoint_override: None,
+            user: None,
+        };
+        assert!(spec.entrypoint_override.is_none());
+        assert!(spec.user.is_none());
+    }
+
+    #[test]
+    fn container_spec_stores_entrypoint_and_user() {
+        let spec = ContainerSpec {
+            image: "ubuntu:22.04".into(),
+            env: Default::default(),
+            mounts: vec![],
+            network: None,
+            memory_limit_bytes: None,
+            cpu_period: None,
+            cpu_quota: None,
+            labels: Default::default(),
+            timeout_secs: 60,
+            entrypoint_override: Some(vec!["/bin/sh".into(), "/etc/foundry/bootstrap.sh".into()]),
+            user: Some("1000".into()),
+        };
+        assert_eq!(
+            spec.entrypoint_override.as_deref(),
+            Some(&["/bin/sh".to_string(), "/etc/foundry/bootstrap.sh".to_string()][..])
+        );
+        assert_eq!(spec.user.as_deref(), Some("1000"));
+    }
 }

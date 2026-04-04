@@ -488,6 +488,8 @@ impl Dispatcher {
             cpu_quota,
             labels,
             timeout_secs: self.config.container.timeout_secs,
+            entrypoint_override: None,  // set in Task 4
+            user: None,                 // set in Task 4
         };
 
         // Clone everything needed for spawn
