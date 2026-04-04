@@ -398,18 +398,14 @@ impl Dispatcher {
             IssuePhase::Done => None,
         };
         let instruction = build_instruction(&ctx, phase_cfg);
-        let instruction_json = serde_json::to_vec(&instruction)?;
+        let directive = instruction.directive.clone();
 
-        // Ensure volume and write instruction
+        // Ensure the issue volume exists (result.json is written here by Claude)
         let vol_name = key.volume_name(&self.config.volumes.issue_prefix);
         self.runtime
             .ensure_volume(&vol_name)
             .await
             .unwrap_or_else(|e| warn!("ensure_volume failed: {}", e));
-        self.runtime
-            .write_to_volume(&vol_name, "instruction.json", &instruction_json)
-            .await
-            .unwrap_or_else(|e| warn!("write_to_volume failed: {}", e));
 
         // Build container spec
         let mut env = HashMap::new();
@@ -448,6 +444,7 @@ impl Dispatcher {
                 env.insert(key.to_string(), val);
             }
         }
+        env.insert("FOUNDRY_DIRECTIVE".to_string(), directive);
 
         let mut labels = HashMap::new();
         labels.insert(
@@ -488,8 +485,11 @@ impl Dispatcher {
             cpu_quota,
             labels,
             timeout_secs: self.config.container.timeout_secs,
-            entrypoint_override: None,  // set in Task 4
-            user: None,                 // set in Task 4
+            entrypoint_override: Some(vec![
+                "/bin/sh".to_string(),
+                "/etc/foundry/bootstrap.sh".to_string(),
+            ]),
+            user: self.config.container.user.clone(),
         };
 
         // Clone everything needed for spawn
@@ -634,6 +634,7 @@ mod tests {
     struct MockRuntime {
         spawn_count: Arc<AtomicUsize>,
         written_volumes: Arc<Mutex<HashMap<(String, String), Vec<u8>>>>,
+        last_spec: Arc<Mutex<Option<ContainerSpec>>>,
     }
 
     impl MockRuntime {
@@ -641,6 +642,7 @@ mod tests {
             Arc::new(Self {
                 spawn_count: Arc::new(AtomicUsize::new(0)),
                 written_volumes: Arc::new(Mutex::new(HashMap::new())),
+                last_spec: Arc::new(Mutex::new(None)),
             })
         }
     }
@@ -649,9 +651,10 @@ mod tests {
     impl ContainerRuntime for MockRuntime {
         async fn run_container(
             &self,
-            _spec: &ContainerSpec,
+            spec: &ContainerSpec,
         ) -> Result<ContainerResult, ContainerError> {
             self.spawn_count.fetch_add(1, Ordering::SeqCst);
+            *self.last_spec.lock().await = Some(spec.clone());
             Ok(ContainerResult {
                 container_id: "mock-container".to_string(),
                 exit_code: 0,
@@ -949,7 +952,90 @@ approve = "/approve"
     }
 
     #[tokio::test]
-    async fn planning_prompt_override_is_applied_to_instruction() {
+    async fn spawn_turn_sets_foundry_directive_env_var() {
+        let runtime = MockRuntime::new();
+        let last_spec = runtime.last_spec.clone();
+        let dispatcher = make_dispatcher(runtime);
+
+        dispatcher
+            .handle_event(Event::IssueAssigned {
+                repo: RepoId { owner: "alice".into(), repo: "proj".into() },
+                issue_number: 1,
+                assigner: "bob".into(),
+                delivery_id: "del-1".into(),
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let spec = last_spec.lock().await;
+        let spec = spec.as_ref().expect("run_container should have been called");
+        assert!(
+            spec.env.contains_key("FOUNDRY_DIRECTIVE"),
+            "FOUNDRY_DIRECTIVE must be set in env"
+        );
+        assert!(
+            !spec.env["FOUNDRY_DIRECTIVE"].is_empty(),
+            "FOUNDRY_DIRECTIVE must not be empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_turn_sets_entrypoint_override() {
+        let runtime = MockRuntime::new();
+        let last_spec = runtime.last_spec.clone();
+        let dispatcher = make_dispatcher(runtime);
+
+        dispatcher
+            .handle_event(Event::IssueAssigned {
+                repo: RepoId { owner: "alice".into(), repo: "proj".into() },
+                issue_number: 2,
+                assigner: "bob".into(),
+                delivery_id: "del-2".into(),
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let spec = last_spec.lock().await;
+        let spec = spec.as_ref().expect("run_container should have been called");
+        assert_eq!(
+            spec.entrypoint_override.as_deref(),
+            Some(&["/bin/sh".to_string(), "/etc/foundry/bootstrap.sh".to_string()][..]),
+            "entrypoint_override must point to bootstrap.sh"
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_turn_does_not_write_instruction_json() {
+        let runtime = MockRuntime::new();
+        let written = runtime.written_volumes.clone();
+        let dispatcher = make_dispatcher(runtime);
+
+        dispatcher
+            .handle_event(Event::IssueAssigned {
+                repo: RepoId { owner: "alice".into(), repo: "proj".into() },
+                issue_number: 3,
+                assigner: "bob".into(),
+                delivery_id: "del-3".into(),
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let map = written.lock().await;
+        let wrote_instruction = map.keys().any(|(_, path)| path == "instruction.json");
+        assert!(!wrote_instruction, "instruction.json must not be written to any volume");
+    }
+
+    #[tokio::test]
+    async fn planning_prompt_override_is_applied_to_directive_env_var() {
         let toml = r#"
 [server]
 listen_addr = "0.0.0.0:8477"
@@ -981,15 +1067,12 @@ prompt = "CUSTOM PLANNING for {{owner}}/{{repo}} issue #{{issue_number}}"
         let config = Arc::new(Config::from_toml(toml).unwrap());
         let store: Arc<dyn SessionStore> = Arc::new(MemorySessionStore::new());
         let runtime = MockRuntime::new();
-        let written = runtime.written_volumes.clone();
+        let last_spec = runtime.last_spec.clone();
         let dispatcher = Dispatcher::new(store, runtime, config);
 
         dispatcher
             .handle_event(Event::IssueAssigned {
-                repo: RepoId {
-                    owner: "alice".into(),
-                    repo: "proj".into(),
-                },
+                repo: RepoId { owner: "alice".into(), repo: "proj".into() },
                 issue_number: 99,
                 assigner: "bob".into(),
                 delivery_id: "del-override".into(),
@@ -1000,22 +1083,13 @@ prompt = "CUSTOM PLANNING for {{owner}}/{{repo}} issue #{{issue_number}}"
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let map = written.lock().await;
-        let vol_key = (
-            "foundry-issue__alice__proj__99".to_string(),
-            "instruction.json".to_string(),
-        );
-        let bytes = map
-            .get(&vol_key)
-            .expect("instruction.json should have been written");
-        let instruction: crate::directive::Instruction =
-            serde_json::from_slice(bytes).expect("instruction.json should deserialize");
+        let spec = last_spec.lock().await;
+        let spec = spec.as_ref().expect("run_container should have been called");
+        let directive = spec.env.get("FOUNDRY_DIRECTIVE").expect("FOUNDRY_DIRECTIVE must be set");
         assert!(
-            instruction
-                .directive
-                .contains("CUSTOM PLANNING for alice/proj issue #99"),
+            directive.contains("CUSTOM PLANNING for alice/proj issue #99"),
             "directive should contain custom prompt, got: {}",
-            instruction.directive
+            directive
         );
     }
 }
